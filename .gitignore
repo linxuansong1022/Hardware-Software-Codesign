@@ -1,18 +1,54 @@
-# System files
+# --- OS & System ---
 .DS_Store
-.vscode/
+.Thumbs.db
+.Trashes
+__MACOSX/
 
-# Python
+# --- IDE & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Python ---
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Data and Models (Large files)
+# --- C/C++ & ESP32 (Espressif/PlatformIO) ---
+build/
+sdkconfig
+sdkconfig.old
+*.o
+*.obj
+*.elf
+*.bin
+*.map
+*.hex
+.pio/
+.pioenvs/
+
+# --- Project Specific Data (Large Files) ---
+# Audio data
 *.wav
-*.npy
-*.tflite
-*.keras
-*.h5
-
-# Directories with large data
 keywords/data/
+
+# Model & Training data
+*.npy
+*.npz
+*.h5
+*.keras
+*.tflite
 keywords/python/gen/
+
+# --- Temporary/Logs ---
+*.log
+tmp/
