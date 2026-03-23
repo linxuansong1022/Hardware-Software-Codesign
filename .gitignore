@@ -1,54 +1,8 @@
-# --- OS & System ---
-.DS_Store
-.Thumbs.db
-.Trashes
-__MACOSX/
+# 忽略所有内容，除了 face 目录
+/*
+!face/
 
-# --- IDE & Editors ---
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# --- Python ---
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.env
-.venv
-pip-log.txt
-pip-delete-this-directory.txt
-
-# --- C/C++ & ESP32 (Espressif/PlatformIO) ---
-build/
-sdkconfig
-sdkconfig.old
-*.o
-*.obj
-*.elf
-*.bin
-*.map
-*.hex
-.pio/
-.pioenvs/
-
-# --- Project Specific Data (Large Files) ---
-# Audio data
-*.wav
-keywords/data/
-
-# Model & Training data
-*.npy
-*.npz
-*.h5
-*.keras
-*.tflite
-keywords/python/gen/
-
-# --- Temporary/Logs ---
-*.log
-tmp/
+# 但 face 目录下的 .DS_Store 等常见无用文件依然忽略
+face/.DS_Store
+face/*.log
+face/*.tmp
