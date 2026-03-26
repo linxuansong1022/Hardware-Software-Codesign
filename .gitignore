@@ -6,3 +6,8 @@
 face/.DS_Store
 face/*.log
 face/*.tmp
+face/data/person_a/
+face/data/person_b/
+face/data/person_c/
+face/data/unknown/
+face/python/gen/
