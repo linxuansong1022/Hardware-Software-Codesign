@@ -1,5 +1,5 @@
 session_id,timestamp,class,collector,lighting,accessories,background,task,count,notes
-1,2026-03-26 22:44,person_a,linxuan,low,none,wall,A-frontal,50,不戴眼镜三个距离近中远
-2,2026-03-26 22:46,person_a,linxuan,low,none,wall,B-angle,40,左右转头俯仰微笑说话
-3,2026-03-26 22:49,person_a,linxuan,low,none,wall,F-expression,30,说话动态表情
-4,2026-03-26 22:53,person_a,linxuan,low,glasses,wall,D-accessories,15,戴眼镜床头灯
+1,2026-03-26 23:20,person_a,linxuan,low,none,wall,A-frontal,40,不戴眼镜近中两个距离
+2,2026-03-26 23:33,person_a,linxuan,low,none,wall,B-angle,40,左右转头俯仰微笑说话
+3,2026-03-26 23:35,person_a,linxuan,low,none,wall,F-expression,30,说话动态表情
+4,2026-03-26 23:37,person_a,linxuan,low,glasses,wall,D-accessories,15,戴眼镜床头灯
