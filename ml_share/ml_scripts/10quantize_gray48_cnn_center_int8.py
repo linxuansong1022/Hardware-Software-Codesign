@@ -5,9 +5,6 @@ from PIL import Image
 import tensorflow as tf
 
 
-# =========================
-# 1. 路径与配置
-# =========================
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 MANIFEST_CSV = PROJECT_ROOT / "data" / "metadata" / "image_manifest_split.csv"
@@ -19,9 +16,7 @@ NUM_CHANNELS = 1
 REPRESENTATIVE_SAMPLES = 200
 
 
-# =========================
-# 2. 读取 manifest
-# =========================
+#读取 manifest
 def read_manifest(csv_path):
     rows = []
     with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -46,16 +41,14 @@ def filter_train_rows(rows):
     return filtered
 
 
-# =========================
-# 3. 路径解析
-# =========================
+# 路径解析
 def resolve_image_path(filepath_in_manifest):
     return PROJECT_ROOT / filepath_in_manifest
 
 
-# =========================
-# 4. 图片预处理（必须和训练保持一致）
-# =========================
+
+#图片预处理（必须和训练保持一致）
+
 def load_one_image_gray(img_path, image_size):
     img = Image.open(img_path).convert("L")
     img = img.resize(image_size)
@@ -64,9 +57,8 @@ def load_one_image_gray(img_path, image_size):
     return arr
 
 
-# =========================
-# 5. representative dataset
-# =========================
+
+# representative dataset
 def representative_dataset_gen(train_rows):
     selected_rows = train_rows[:REPRESENTATIVE_SAMPLES]
 
@@ -77,9 +69,8 @@ def representative_dataset_gen(train_rows):
         yield [x]
 
 
-# =========================
-# 6. 主程序
-# =========================
+
+#主程序
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

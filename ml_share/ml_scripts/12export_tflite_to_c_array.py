@@ -1,9 +1,6 @@
 from pathlib import Path
 
 
-# =========================
-# 1. 路径配置
-# =========================
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 TFLITE_PATH = PROJECT_ROOT / "models" / "gray48_cnn_center_w001_int8" / "gray48_cnn_center_int8.tflite"
@@ -12,9 +9,7 @@ OUTPUT_DIR = PROJECT_ROOT / "models" / "gray48_cnn_center_w001_int8" / "c_export
 ARRAY_NAME = "g_model_data"
 
 
-# =========================
-# 2. 工具函数
-# =========================
+
 def format_bytes_as_c_array(data: bytes, bytes_per_line: int = 12) -> str:
     lines = []
     for i in range(0, len(data), bytes_per_line):
@@ -24,9 +19,7 @@ def format_bytes_as_c_array(data: bytes, bytes_per_line: int = 12) -> str:
     return ",\n".join(lines)
 
 
-# =========================
-# 3. 主程序
-# =========================
+
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

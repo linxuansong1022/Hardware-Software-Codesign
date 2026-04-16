@@ -8,9 +8,6 @@ from sklearn.metrics import classification_report, confusion_matrix
 import tensorflow as tf
 
 
-# =========================
-# 1. 路径与配置
-# =========================
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 MANIFEST_CSV = PROJECT_ROOT / "data" / "metadata" / "image_manifest_split.csv"
@@ -21,9 +18,6 @@ CLASS_NAMES = ["person_a", "person_b", "person_c"]
 CLASS_TO_INDEX = {name: idx for idx, name in enumerate(CLASS_NAMES)}
 
 
-# =========================
-# 2. 读取 manifest
-# =========================
 def read_manifest(csv_path):
     rows = []
     with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -55,9 +49,6 @@ def print_split_distribution(rows, split_name):
         print(f"  {class_name}: {counter[class_name]}")
 
 
-# =========================
-# 3. 图片预处理（和训练保持一致）
-# =========================
 def resolve_image_path(filepath_in_manifest):
     return PROJECT_ROOT / filepath_in_manifest
 
@@ -87,9 +78,9 @@ def build_numpy_dataset(rows, image_size):
     return x, y
 
 
-# =========================
-# 4. 跑 TFLite INT8 推理
-# =========================
+
+# 跑 TFLite INT8 推理
+
 def run_tflite_inference(x_data, tflite_path):
     interpreter = tf.lite.Interpreter(model_path=str(tflite_path))
     interpreter.allocate_tensors()
@@ -134,10 +125,6 @@ def run_tflite_inference(x_data, tflite_path):
 
     return y_pred, y_prob_dequant
 
-
-# =========================
-# 5. 主程序
-# =========================
 def main():
     print("读取 manifest ...")
     rows = read_manifest(MANIFEST_CSV)
