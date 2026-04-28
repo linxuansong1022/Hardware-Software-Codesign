@@ -1,6 +1,7 @@
 .idea
 .venv
 .vscode
+.DS_Store
 __pycache__
 build
 data
@@ -10,6 +11,9 @@ models
 temp
 dependencies.lock
 sdkconfig
+sdkconfig.old
 model.c
 model.h
 test_case.h
+node_modules
+dist
