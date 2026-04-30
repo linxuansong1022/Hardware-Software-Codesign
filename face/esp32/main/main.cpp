@@ -29,6 +29,7 @@
 
 // 项目模块
 #include "camera.h"      // 摄像头：初始化 + 拍照
+#include "centroids_config.h"  // 二阶段拒识：embedding 质心和距离阈值
 #include "preprocess.h"  // 预处理：RGB565 → 48×48 灰度 float
 #include "inference.h"   // 推理：加载模型 + 量化 + Invoke + 反量化
 
@@ -40,12 +41,6 @@
 // active-low：GPIO 输出 0 = LED 亮，GPIO 输出 1 = LED 灭
 #define LED_PIN GPIO_NUM_21
 
-// 置信度阈值 — softmax 最大概率 >= 这个值才算"有效识别"
-// 可以根据实测调整：
-//   高（如 0.95）→ 更安全但可能误拒
-//   低（如 0.80）→ 更宽松但可能误放
-#define CONFIDENCE_THRESHOLD 0.95f
-
 // ── 多帧投票参数 ─────────────────────────────────────────
 // 原理：最近 VOTE_WINDOW 帧里，如果同一个人出现 >= VOTE_THRESHOLD 次，
 //       才认为真的是这个人。否则判为 UNKNOWN。
@@ -54,7 +49,7 @@
 //   - 真人脸，模型预测稳定（连续都是 A）→ 投票通过
 //   - 这样不改模型就能提升 unknown rejection
 #define VOTE_WINDOW    5   // 滑动窗口大小（看最近 5 帧）
-#define VOTE_THRESHOLD 3   // 至少 3 帧一致才放行
+#define VOTE_THRESHOLD 4   // 至少 4 帧一致才放行
 
 // 类别名称 — 用于串口打印，方便调试
 static const char *CLASS_NAMES[] = {"person_a", "person_b", "person_c"};
@@ -81,6 +76,9 @@ static float face_features[FACE_INPUT_SIZE];
 // 推理结果：3 个 float（person_a, person_b, person_c 的概率）
 static float prediction[NUM_CLASSES];
 
+// Dense(32) embedding，用于计算到三个人质心的距离
+static float embedding[FACE_EMBEDDING_DIM];
+
 // ── 多帧投票缓冲区 ──────────────────────────────────────
 // vote_buffer[i] 存第 i 帧的判断结果：
 //   -1 = UNKNOWN（置信度不够）
@@ -88,6 +86,31 @@ static float prediction[NUM_CLASSES];
 // vote_idx 是循环写入的位置（环形缓冲区）
 static int vote_buffer[VOTE_WINDOW];
 static int vote_idx = 0;
+
+static int find_nearest_centroid(const float *emb, float *min_dist_sq)
+{
+    int nearest_class = 0;
+    float best_dist_sq = 0.0f;
+
+    for (int c = 0; c < NUM_CLASSES; c++)
+    {
+        float dist_sq = 0.0f;
+        for (int d = 0; d < FACE_EMBEDDING_DIM; d++)
+        {
+            float diff = emb[d] - FACE_CENTROIDS[c][d];
+            dist_sq += diff * diff;
+        }
+
+        if (c == 0 || dist_sq < best_dist_sq)
+        {
+            best_dist_sq = dist_sq;
+            nearest_class = c;
+        }
+    }
+
+    *min_dist_sq = best_dist_sq;
+    return nearest_class;
+}
 
 // ============================================================================
 // setup() — 开机初始化
@@ -162,7 +185,7 @@ void loop(void)
     // predict: 跑 CNN（Invoke），输出 int8 → float 概率（反量化）
     inference_put_features(face_features);
 
-    if (!inference_predict(prediction))
+    if (!inference_predict(prediction, embedding))
     {
         ESP_LOGE(TAG, "Inference failed!");
         return;
@@ -181,10 +204,17 @@ void loop(void)
         }
     }
 
+    float min_dist_sq = 0.0f;
+    int nearest_centroid = find_nearest_centroid(embedding, &min_dist_sq);
+
     // ── 5. 多帧投票 ──────────────────────────────────────
     // 先判断这一帧的单帧结果
     int frame_result;
-    if (max_score >= CONFIDENCE_THRESHOLD)
+    bool softmax_ok = max_score >= SOFTMAX_THRESHOLD;
+    bool distance_ok = min_dist_sq <= DISTANCE_THRESHOLD_SQ;
+    bool class_agree = nearest_centroid == best_class;
+
+    if (softmax_ok && distance_ok && class_agree)
     {
         frame_result = best_class;  // 0/1/2 = person_a/b/c
     }
@@ -238,10 +268,14 @@ void loop(void)
     const char *frame_name = (frame_result >= 0) ? CLASS_NAMES[frame_result] : "UNKNOWN";
     const char *vote_name = access_granted ? CLASS_NAMES[vote_winner] : "UNKNOWN";
 
-    ESP_LOGI(TAG, "Frame: %s (%.2f) | Vote: %s (%d/%d) | [A=%.3f B=%.3f C=%.3f]",
+    ESP_LOGI(TAG,
+             "Frame: %s (%.2f, dist_sq=%.3f, nearest=%s) | Vote: %s (%d/%d) | "
+             "[A=%.3f B=%.3f C=%.3f] | gates[S=%d D=%d C=%d]",
              frame_name, max_score,
+             min_dist_sq, CLASS_NAMES[nearest_centroid],
              vote_name, vote_max_count, VOTE_WINDOW,
-             prediction[0], prediction[1], prediction[2]);
+             prediction[0], prediction[1], prediction[2],
+             softmax_ok, distance_ok, class_agree);
 }
 
 // ============================================================================
