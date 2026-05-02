@@ -1,8 +1,60 @@
-# Lab Code for DTU Course *Hardware/Software Codesign* (02214)
+# Open-Set Face Recognition on ESP32-S3
 
-This repository contains lab code for the DTU course *Hardware/Software Codesign* (02214).
+This repository contains the final face-recognition project for DTU 02214 Hardware/Software Codesign.
 
- * `keywords`: [Week 2: Keyword Spotter](keywords/README.md). This is the first lab, which is primarily about installing all the tools on your computer. It also provides a complete example of an ML application for the Seeed Studio ESP32-S3 Sense board, and you're welcome to reuse code snippets from the application for your project.
- * `camera`: [Week 3: Image Data Collection](camera/README.md). This is the second lab, which is an exercise in systematic data collection practices. The code provides a simple ESP32-S3 application that captures images with the camera, once per second, and dumps the image data on the serial port over USB. It includes camera driver code that you're welcome to reuse for your project. An accompanying simple Python application receives the images and allows you to save the images to disk.
+The system recognizes three enrolled people and rejects unknown faces using a compact INT8 CNN deployed on an ESP32-S3 Sense board.
 
-More detailed instructions in the README.md files for each lab. These instructions are also available on the <a href="https://learn.inside.dtu.dk/d2l/home/296896">course page at DTU Learn</a>.
+## Project Structure
+
+- `face/esp32/` - ESP32-S3 firmware, camera pipeline, TFLite Micro inference, open-set rejection, and serial/Web Serial output.
+- `face/frontend/` - Vite/React dashboard for displaying the ESP32 camera stream and recognition result.
+- `face/python/` - Python utilities used by the face project.
+- `face/*.md` - deployment notes, rejection notes, and generated evaluation summaries.
+- `ml_share/ml_scripts/` - training, quantization, evaluation, and deployment-metrics scripts.
+- `ml_share/models/` - trained/exported model artifacts used by the deployment pipeline.
+- `ml_share/data/metadata/` - metadata and split files used by the ML scripts.
+
+Raw face images are intentionally not included in the final branch.
+
+## Main Results
+
+The deployed INT8 model keeps high closed-set accuracy while adding conservative unknown rejection:
+
+- INT8 closed-set accuracy: `98.70%`
+- Softmax-only unknown false accept: `45/259`
+- Two-stage rejection unknown false accept: `11/259`
+- TFLite model size: `29.7 KB`
+- ESP32 firmware app binary size: about `395-418 KB`, depending on serial streaming support
+
+See:
+
+- `face/int8_deployment_eval.md`
+- `face/deployment_metrics.md`
+- `face/OPENSET_REJECTION_NOTE.md`
+- `face/DEPLOYMENT_OPTIMIZATION_PLAN.md`
+- `face/DEPLOYMENT_WORK_EXECUTION_PLAN.md`
+
+## Build ESP32 Firmware
+
+```bash
+cd face/esp32
+source /Users/songlinxuan/esp/esp-idf/export.sh
+export PATH=/Users/songlinxuan/.espressif/python_env/idf6.1_py3.14_env/bin:$PATH
+idf.py build
+```
+
+Flash and monitor:
+
+```bash
+idf.py -p /dev/cu.usbmodemXXXX flash monitor
+```
+
+## Run Frontend
+
+```bash
+cd face/frontend
+npm install
+npm run dev -- --host 127.0.0.1 --port 4174
+```
+
+The frontend connects to the ESP32 through Web Serial.
