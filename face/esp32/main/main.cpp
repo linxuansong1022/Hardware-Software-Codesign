@@ -25,8 +25,10 @@
 #include "freertos/FreeRTOS.h"  // 实时操作系统（ESP32 的底层调度系统）
 #include "freertos/task.h"      // 任务延时函数 vTaskDelay()
 #include "driver/gpio.h"        // GPIO 控制（用于 LED）
+#include "driver/usb_serial_jtag.h"
 #include "esp_log.h"            // 日志打印（ESP_LOGI, ESP_LOGE 等）
 #include "esp_timer.h"          // 高精度计时，用于部署端 latency 测量
+#include "nvs_flash.h"
 
 // 项目模块
 #include "camera.h"      // 摄像头：初始化 + 拍照
@@ -61,6 +63,14 @@ static const char *CLASS_NAMES[] = {"person_a", "person_b", "person_c"};
 // 日志标签
 static const char *TAG = "FaceRecog";
 
+// Web/串口前端协议常量
+static constexpr size_t SERIAL_CHUNK_SIZE = 512;
+static constexpr size_t FRAME_SIZE_BYTES = FRAME_W * FRAME_H * FRAME_C;
+static const char *READY_PREAMBLE = "\n===READY===\n";
+static const char *METRICS_PREAMBLE = "\n===METRICS===\n";
+static const char *FRAME_PREAMBLE = "\n===FRAME===\n";
+static const char *START_STREAM_COMMAND = "START_STREAM\n";
+
 // ============================================================================
 // 缓冲区 — 存储摄像头帧和处理结果
 // ============================================================================
@@ -69,7 +79,7 @@ static const char *TAG = "FaceRecog";
 // 这是整个程序里最大的一块内存
 // 注意：如果内存不够，可以用 heap_caps_malloc(size, MALLOC_CAP_SPIRAM)
 // 把它放到 PSRAM（8MB 外部内存）而不是 SRAM（512KB 内部内存）
-static uint8_t image_buffer[CAMERA_W * CAMERA_H * 2];
+static uint8_t image_buffer[FRAME_W * FRAME_H * FRAME_C];
 
 // 预处理后的特征：48×48 = 2,304 个 float
 static float face_features[FACE_INPUT_SIZE];
@@ -87,6 +97,69 @@ static float embedding[FACE_EMBEDDING_DIM];
 // vote_idx 是循环写入的位置（环形缓冲区）
 static int vote_buffer[VOTE_WINDOW];
 static int vote_idx = 0;
+static bool stream_enabled = false;
+
+static void serial_write_all(const uint8_t *data, size_t length)
+{
+    for (size_t offset = 0; offset < length;)
+    {
+        const size_t chunk = (length - offset > SERIAL_CHUNK_SIZE) ? SERIAL_CHUNK_SIZE : (length - offset);
+        const int written = usb_serial_jtag_write_bytes(data + offset, chunk, pdMS_TO_TICKS(1000));
+        if (written > 0)
+        {
+            offset += static_cast<size_t>(written);
+        }
+        else
+        {
+            vTaskDelay(1);
+        }
+    }
+}
+
+static void serial_write_text(const char *text)
+{
+    serial_write_all(reinterpret_cast<const uint8_t *>(text), strlen(text));
+}
+
+static void poll_stream_command(void)
+{
+    static char command_buffer[32];
+    static size_t command_len = 0;
+
+    char incoming[32];
+    const int bytes_read = usb_serial_jtag_read_bytes(incoming, sizeof(incoming), 0);
+    if (bytes_read <= 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < bytes_read; ++i)
+    {
+        const char c = incoming[i];
+        if (command_len < sizeof(command_buffer) - 1)
+        {
+            command_buffer[command_len++] = c;
+            command_buffer[command_len] = '\0';
+        }
+        else
+        {
+            command_len = 0;
+            command_buffer[0] = '\0';
+        }
+
+        if (c == '\n')
+        {
+            if (strcmp(command_buffer, START_STREAM_COMMAND) == 0)
+            {
+                stream_enabled = true;
+                serial_write_text("\n===STREAMING===\n");
+                serial_write_text("Web stream started.\n");
+            }
+            command_len = 0;
+            command_buffer[0] = '\0';
+        }
+    }
+}
 
 static int find_nearest_centroid(const float *emb, float *min_dist_sq)
 {
@@ -123,6 +196,20 @@ static int find_nearest_centroid(const float *emb, float *min_dist_sq)
 // ============================================================================
 void setup(void)
 {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    usb_serial_jtag_driver_config_t usb_serial_jtag_config = {
+        .tx_buffer_size = 2048,
+        .rx_buffer_size = 256,
+    };
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_serial_jtag_config));
+
     // 初始化推理引擎 — 加载模型、注册算子、分配 tensor arena
     if (!inference_init())
     {
@@ -151,7 +238,9 @@ void setup(void)
         vote_buffer[i] = -1;
     }
 
-    ESP_LOGI(TAG, "Initialization complete. Starting face recognition...");
+    ESP_LOGI(TAG, "Initialization complete. Waiting for START_STREAM command.");
+    serial_write_text(READY_PREAMBLE);
+    serial_write_text("Send START_STREAM to begin hardware video streaming.\n");
 }
 
 // ============================================================================
@@ -168,6 +257,9 @@ void setup(void)
 void loop(void)
 {
     int64_t t_loop_start_us = esp_timer_get_time();
+
+    int64_t t_loop_start_us = esp_timer_get_time();
+    poll_stream_command();
 
     // ── 1. 拍照 ──────────────────────────────────────────
     // camera_capture_frame() 从 OV2640 拍一帧，写入 image_buffer
@@ -269,8 +361,6 @@ void loop(void)
         gpio_set_level(LED_PIN, 1);  // LED 灭 = 拒绝
     }
 
-    // ── 7. 串口输出 ─────────────────────────────────────
-    // 显示：单帧结果 | 投票结果 | 票数 | 三个概率
     const char *frame_name = (frame_result >= 0) ? CLASS_NAMES[frame_result] : "UNKNOWN";
     const char *vote_name = access_granted ? CLASS_NAMES[vote_winner] : "UNKNOWN";
 
@@ -296,6 +386,51 @@ void loop(void)
              (long long)inference_ms,
              (long long)total_ms,
              fps);
+
+    if (!stream_enabled)
+    {
+        vTaskDelay(pdMS_TO_TICKS(30));
+        return;
+    }
+
+    // ── 7. 串口输出 ─────────────────────────────────────
+    // 同时发元数据和原始 RGB565 帧，供 Web Serial 前端直接展示。
+    char metrics_json[256];
+    const int metrics_len = snprintf(
+        metrics_json,
+        sizeof(metrics_json),
+        "{\"frame\":\"%s\",\"frameConfidence\":%.3f,\"vote\":\"%s\",\"voteCount\":%d,\"voteWindow\":%d,"
+        "\"scores\":{\"A\":%.3f,\"B\":%.3f,\"C\":%.3f},"
+        "\"nearest\":\"%s\",\"distSq\":%.3f,"
+        "\"gates\":{\"softmax\":%d,\"distance\":%d,\"classAgreement\":%d},"
+        "\"timingMs\":{\"capture\":%lld,\"preprocess\":%lld,\"inference\":%lld,\"total\":%lld,\"fps\":%.2f}}\n",
+        frame_name,
+        max_score,
+        vote_name,
+        vote_max_count,
+        VOTE_WINDOW,
+        prediction[0],
+        prediction[1],
+        prediction[2],
+        CLASS_NAMES[nearest_centroid],
+        min_dist_sq,
+        softmax_ok,
+        distance_ok,
+        class_agree,
+        (long long)capture_ms,
+        (long long)preprocess_ms,
+        (long long)inference_ms,
+        (long long)total_ms,
+        fps);
+
+    if (metrics_len > 0)
+    {
+        serial_write_text(METRICS_PREAMBLE);
+        serial_write_all(reinterpret_cast<const uint8_t *>(metrics_json), static_cast<size_t>(metrics_len));
+    }
+
+    serial_write_text(FRAME_PREAMBLE);
+    serial_write_all(image_buffer, FRAME_SIZE_BYTES);
 }
 
 // ============================================================================

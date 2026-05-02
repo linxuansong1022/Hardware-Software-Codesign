@@ -1,6 +1,7 @@
 .idea
 .venv
 .vscode
+.DS_Store
 __pycache__
 build
 data
@@ -10,6 +11,7 @@ models
 temp
 dependencies.lock
 sdkconfig
+sdkconfig.old
 model.c
 model.h
 test_case.h
@@ -20,3 +22,5 @@ sdkconfig.old
 # Local report and course material files.
 *.pdf
 report/
+node_modules
+dist
