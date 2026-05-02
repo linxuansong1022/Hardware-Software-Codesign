@@ -13,3 +13,10 @@ sdkconfig
 model.c
 model.h
 test_case.h
+.DS_Store
+.cache/
+sdkconfig.old
+
+# Local report and course material files.
+*.pdf
+report/

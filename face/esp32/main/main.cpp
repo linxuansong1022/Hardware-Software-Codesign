@@ -26,6 +26,7 @@
 #include "freertos/task.h"      // 任务延时函数 vTaskDelay()
 #include "driver/gpio.h"        // GPIO 控制（用于 LED）
 #include "esp_log.h"            // 日志打印（ESP_LOGI, ESP_LOGE 等）
+#include "esp_timer.h"          // 高精度计时，用于部署端 latency 测量
 
 // 项目模块
 #include "camera.h"      // 摄像头：初始化 + 拍照
@@ -166,6 +167,8 @@ void setup(void)
 // ============================================================================
 void loop(void)
 {
+    int64_t t_loop_start_us = esp_timer_get_time();
+
     // ── 1. 拍照 ──────────────────────────────────────────
     // camera_capture_frame() 从 OV2640 拍一帧，写入 image_buffer
     // 返回 false 表示拍照失败（摄像头可能卡了），跳过这一帧
@@ -174,11 +177,13 @@ void loop(void)
         ESP_LOGW(TAG, "Frame capture failed, skipping...");
         return;
     }
+    int64_t t_capture_done_us = esp_timer_get_time();
 
     // ── 2. 预处理 ────────────────────────────────────────
     // 320×240 RGB565 → 48×48 灰度 float [0.0, 1.0]
     // 这一步做了：中心裁剪、5×5 区域平均缩放、灰度转换、归一化
     preprocess_frame(image_buffer, face_features);
+    int64_t t_preprocess_done_us = esp_timer_get_time();
 
     // ── 3. 量化 + 推理 ──────────────────────────────────
     // put_features: float [0.0, 1.0] → int8 [-128, 127]（量化）
@@ -190,6 +195,7 @@ void loop(void)
         ESP_LOGE(TAG, "Inference failed!");
         return;
     }
+    int64_t t_inference_done_us = esp_timer_get_time();
 
     // ── 4. 找最大概率的类别 ─────────────────────────────
     int best_class = 0;
@@ -276,6 +282,20 @@ void loop(void)
              vote_name, vote_max_count, VOTE_WINDOW,
              prediction[0], prediction[1], prediction[2],
              softmax_ok, distance_ok, class_agree);
+
+    int64_t capture_ms = (t_capture_done_us - t_loop_start_us) / 1000;
+    int64_t preprocess_ms = (t_preprocess_done_us - t_capture_done_us) / 1000;
+    int64_t inference_ms = (t_inference_done_us - t_preprocess_done_us) / 1000;
+    int64_t total_ms = (esp_timer_get_time() - t_loop_start_us) / 1000;
+    float fps = total_ms > 0 ? 1000.0f / (float)total_ms : 0.0f;
+
+    ESP_LOGI(TAG,
+             "timing_ms[capture=%lld preprocess=%lld inference=%lld total=%lld fps=%.2f]",
+             (long long)capture_ms,
+             (long long)preprocess_ms,
+             (long long)inference_ms,
+             (long long)total_ms,
+             fps);
 }
 
 // ============================================================================

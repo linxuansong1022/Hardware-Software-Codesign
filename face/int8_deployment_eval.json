@@ -1,0 +1,79 @@
+{
+  "tflite_path": "/Users/songlinxuan/Desktop/DTU-02214/ml_share/models/gray48_cnn_center_w001_int8/gray48_cnn_center_int8.tflite",
+  "data_dir": "/Users/songlinxuan/Desktop/DTU-02214/face/data",
+  "unknown_dir": "/Users/songlinxuan/Desktop/DTU-02214/face/data/unknown",
+  "test_total": 77,
+  "unknown_total": 259,
+  "int8_test_acc": 0.987012987012987,
+  "confusion_matrix": [
+    [
+      25,
+      0,
+      0
+    ],
+    [
+      0,
+      25,
+      0
+    ],
+    [
+      1,
+      0,
+      26
+    ]
+  ],
+  "softmax_threshold_sweep": [
+    {
+      "threshold": 0.95,
+      "known_accept": 56,
+      "known_total": 77,
+      "unknown_reject": 126,
+      "unknown_false_accept": 133,
+      "unknown_total": 259
+    },
+    {
+      "threshold": 0.98,
+      "known_accept": 44,
+      "known_total": 77,
+      "unknown_reject": 177,
+      "unknown_false_accept": 82,
+      "unknown_total": 259
+    },
+    {
+      "threshold": 0.99,
+      "known_accept": 36,
+      "known_total": 77,
+      "unknown_reject": 214,
+      "unknown_false_accept": 45,
+      "unknown_total": 259
+    },
+    {
+      "threshold": 0.995,
+      "known_accept": 27,
+      "known_total": 77,
+      "unknown_reject": 219,
+      "unknown_false_accept": 40,
+      "unknown_total": 259
+    },
+    {
+      "threshold": 0.999,
+      "known_accept": 0,
+      "known_total": 77,
+      "unknown_reject": 259,
+      "unknown_false_accept": 0,
+      "unknown_total": 259
+    }
+  ],
+  "two_stage": {
+    "softmax_threshold": 0.99,
+    "distance_threshold": 1.875593,
+    "distance_threshold_sq": 3.5178491016490003,
+    "known_accept": 35,
+    "known_total": 77,
+    "unknown_reject": 248,
+    "unknown_false_accept": 11,
+    "unknown_total": 259,
+    "known_mean_min_dist": 1.759916067123413,
+    "unknown_mean_min_dist": 2.0923290252685547
+  }
+}

@@ -11,6 +11,9 @@
 
 #include "esp_log.h"
 
+// [改动 0] 接口头文件：提供 FACE_NUM_CLASSES / FACE_EMBEDDING_DIM
+#include "inference.h"
+
 // [改动 1] 头文件：model.h → model_data.h
 // keywords 的模型文件叫 model.h（里面有 model_binary 数组）
 // 我们的模型文件叫 model_data.h（里面有 g_model_data 数组，由 Kirsi

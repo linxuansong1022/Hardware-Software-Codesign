@@ -1,6 +1,7 @@
 from pathlib import Path
 import argparse
 import csv
+import json
 import re
 from collections import Counter
 
@@ -66,6 +67,18 @@ def parse_args():
         type=float,
         default=None,
         help="Distance threshold. If omitted, read DISTANCE_THRESHOLD from centroids config.",
+    )
+    parser.add_argument(
+        "--summary-json",
+        type=Path,
+        default=None,
+        help="Optional path for writing a machine-readable evaluation summary.",
+    )
+    parser.add_argument(
+        "--summary-md",
+        type=Path,
+        default=None,
+        help="Optional path for writing a Markdown evaluation summary for the report.",
     )
     return parser.parse_args()
 
@@ -152,6 +165,7 @@ def load_unknown_images(image_size, unknown_dir):
 def print_unknown_rejection(known_probs, unknown_probs):
     known_max = np.max(known_probs, axis=1)
     unknown_max = np.max(unknown_probs, axis=1)
+    rows = []
 
     print("\nUnknown 拒识评估（规则: max_softmax >= threshold 才接受）:")
     print(f"{'threshold':>10} {'known_accept':>16} {'unknown_reject':>18} {'unknown_false_accept':>22}")
@@ -160,6 +174,14 @@ def print_unknown_rejection(known_probs, unknown_probs):
         known_accept = int(np.sum(known_max >= threshold))
         unknown_false_accept = int(np.sum(unknown_max >= threshold))
         unknown_reject = len(unknown_max) - unknown_false_accept
+        rows.append({
+            "threshold": threshold,
+            "known_accept": known_accept,
+            "known_total": int(len(known_max)),
+            "unknown_reject": unknown_reject,
+            "unknown_false_accept": unknown_false_accept,
+            "unknown_total": int(len(unknown_max)),
+        })
 
         print(
             f"{threshold:>10.3f} "
@@ -167,6 +189,7 @@ def print_unknown_rejection(known_probs, unknown_probs):
             f"{unknown_reject:>8}/{len(unknown_max):<9} "
             f"{unknown_false_accept:>10}/{len(unknown_max):<10}"
         )
+    return rows
 
 
 def load_centroids(centroids_csv):
@@ -209,7 +232,7 @@ def print_two_stage_rejection(known_probs, known_embeddings,
                               centroids, softmax_threshold, distance_threshold):
     if known_embeddings is None or unknown_embeddings is None:
         print("\n当前 TFLite 模型只有 softmax 输出，跳过二阶段 INT8 评估。")
-        return
+        return None
 
     distance_threshold_sq = distance_threshold * distance_threshold
     known_max = np.max(known_probs, axis=1)
@@ -240,6 +263,18 @@ def print_two_stage_rejection(known_probs, known_embeddings,
     print(f"  unknown_false_accept: {int(np.sum(unknown_accept))}/{len(unknown_accept)}")
     print(f"  known mean min_dist: {float(np.mean(np.sqrt(known_min_dist_sq))):.4f}")
     print(f"  unknown mean min_dist: {float(np.mean(np.sqrt(unknown_min_dist_sq))):.4f}")
+    return {
+        "softmax_threshold": float(softmax_threshold),
+        "distance_threshold": float(distance_threshold),
+        "distance_threshold_sq": float(distance_threshold_sq),
+        "known_accept": int(np.sum(known_accept)),
+        "known_total": int(len(known_accept)),
+        "unknown_reject": int(len(unknown_accept) - np.sum(unknown_accept)),
+        "unknown_false_accept": int(np.sum(unknown_accept)),
+        "unknown_total": int(len(unknown_accept)),
+        "known_mean_min_dist": float(np.mean(np.sqrt(known_min_dist_sq))),
+        "unknown_mean_min_dist": float(np.mean(np.sqrt(unknown_min_dist_sq))),
+    }
 
 
 
@@ -311,6 +346,64 @@ def run_tflite_inference(x_data, tflite_path):
 
     return y_pred, y_prob_dequant, embeddings_dequant
 
+
+def write_summary_files(args, summary):
+    if args.summary_json:
+        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_json.write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"\n写入 JSON 摘要: {args.summary_json}")
+
+    if args.summary_md:
+        args.summary_md.parent.mkdir(parents=True, exist_ok=True)
+        softmax_rows = summary["softmax_threshold_sweep"]
+        two_stage = summary.get("two_stage")
+
+        lines = [
+            "# INT8 Deployment Evaluation Summary",
+            "",
+            f"- TFLite model: `{summary['tflite_path']}`",
+            f"- Data directory: `{summary['data_dir']}`",
+            f"- Unknown directory: `{summary['unknown_dir']}`",
+            f"- Test samples: {summary['test_total']}",
+            f"- Unknown samples: {summary['unknown_total']}",
+            f"- INT8 closed-set accuracy: {summary['int8_test_acc']:.4f}",
+            "",
+            "## Softmax Threshold Sweep",
+            "",
+            "| Threshold | Known accept | Unknown reject | Unknown false accept |",
+            "|---:|---:|---:|---:|",
+        ]
+        for row in softmax_rows:
+            lines.append(
+                f"| {row['threshold']:.3f} | "
+                f"{row['known_accept']}/{row['known_total']} | "
+                f"{row['unknown_reject']}/{row['unknown_total']} | "
+                f"{row['unknown_false_accept']}/{row['unknown_total']} |"
+            )
+
+        if two_stage:
+            lines.extend([
+                "",
+                "## Two-Stage Rejection",
+                "",
+                "| Metric | Value |",
+                "|---|---:|",
+                f"| Softmax threshold | {two_stage['softmax_threshold']:.6f} |",
+                f"| Distance threshold | {two_stage['distance_threshold']:.6f} |",
+                f"| Known accept | {two_stage['known_accept']}/{two_stage['known_total']} |",
+                f"| Unknown reject | {two_stage['unknown_reject']}/{two_stage['unknown_total']} |",
+                f"| Unknown false accept | {two_stage['unknown_false_accept']}/{two_stage['unknown_total']} |",
+                f"| Known mean min distance | {two_stage['known_mean_min_dist']:.4f} |",
+                f"| Unknown mean min distance | {two_stage['unknown_mean_min_dist']:.4f} |",
+            ])
+
+        args.summary_md.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"写入 Markdown 摘要: {args.summary_md}")
+
 def main():
     args = parse_args()
 
@@ -351,12 +444,13 @@ def main():
     x_unknown, unknown_files = load_unknown_images(IMAGE_SIZE, args.unknown_dir)
     print(f"unknown: {len(unknown_files)} 张")
     _, unknown_prob, unknown_embeddings = run_tflite_inference(x_unknown, TFLITE_PATH)
-    print_unknown_rejection(y_prob, unknown_prob)
+    softmax_rows = print_unknown_rejection(y_prob, unknown_prob)
+    two_stage_summary = None
 
     if args.centroids_csv.exists():
         centroids = load_centroids(args.centroids_csv)
         distance_threshold = load_distance_threshold(args)
-        print_two_stage_rejection(
+        two_stage_summary = print_two_stage_rejection(
             y_prob, known_embeddings,
             unknown_prob, unknown_embeddings,
             centroids,
@@ -365,6 +459,19 @@ def main():
         )
     else:
         print(f"\n找不到 centroids CSV，跳过二阶段评估: {args.centroids_csv}")
+
+    summary = {
+        "tflite_path": str(TFLITE_PATH),
+        "data_dir": str(DATA_DIR),
+        "unknown_dir": str(args.unknown_dir),
+        "test_total": int(len(y_test)),
+        "unknown_total": int(len(unknown_files)),
+        "int8_test_acc": test_acc,
+        "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
+        "softmax_threshold_sweep": softmax_rows,
+        "two_stage": two_stage_summary,
+    }
+    write_summary_files(args, summary)
 
 
 if __name__ == "__main__":
