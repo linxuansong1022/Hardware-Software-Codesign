@@ -21,6 +21,7 @@ import argparse
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument("--model", type=str, default=None)
 _parser.add_argument("--output-dir", type=str, default=None)
+_parser.add_argument("--unknown-dir", type=str, default=None)
 _args, _ = _parser.parse_known_args()
 
 MODEL_PATH = Path(_args.model) if _args.model else DEFAULT_MODEL_PATH
@@ -40,7 +41,7 @@ else:
         f"找不到图片数据目录，检查过:\n  {_ML_DATA_DIR}\n  {_FACE_DATA_DIR}"
     )
 
-UNKNOWN_DIR = DATA_DIR / "unknown"
+UNKNOWN_DIR = Path(_args.unknown_dir) if _args.unknown_dir else DATA_DIR / "unknown"
 
 IMAGE_SIZE = (48, 48)
 NUM_CHANNELS = 1
@@ -309,12 +310,17 @@ def find_best_threshold(sweep_results):
     return best
 
 
-def two_stage_sweep(known_softmax_probs, known_min_dists,
-                    unknown_softmax_probs, unknown_min_dists,
+def two_stage_sweep(known_softmax_probs, known_min_dists, known_softmax_pred,
+                    known_nearest_classes,
+                    unknown_softmax_probs, unknown_min_dists, unknown_softmax_pred,
+                    unknown_nearest_classes,
                     softmax_steps=30, dist_steps=30):
     """二维阈值扫描：softmax 阈值 × 距离阈值
 
-    放行条件：softmax_max_prob >= softmax_thresh AND min_dist <= dist_thresh
+    放行条件：
+      softmax_max_prob >= softmax_thresh
+      AND min_dist <= dist_thresh
+      AND nearest_centroid == softmax_pred
     """
     softmax_lo = float(min(np.min(known_softmax_probs), np.min(unknown_softmax_probs)))
     softmax_hi = float(max(np.max(known_softmax_probs), np.max(unknown_softmax_probs)))
@@ -335,12 +341,14 @@ def two_stage_sweep(known_softmax_probs, known_min_dists,
             # 已知人脸：两个条件都满足 → 接受
             known_accepted = (
                 (known_softmax_probs >= s_thresh) &
-                (known_min_dists <= d_thresh)
+                (known_min_dists <= d_thresh) &
+                (known_softmax_pred == known_nearest_classes)
             )
             # 陌生人：两个条件都满足 → 错误接受
             unknown_accepted = (
                 (unknown_softmax_probs >= s_thresh) &
-                (unknown_min_dists <= d_thresh)
+                (unknown_min_dists <= d_thresh) &
+                (unknown_softmax_pred == unknown_nearest_classes)
             )
 
             tp = int(np.sum(known_accepted))
@@ -371,6 +379,63 @@ def two_stage_sweep(known_softmax_probs, known_min_dists,
     return results, best
 
 
+def fixed_softmax_distance_sweep(softmax_threshold, known_softmax_probs, known_min_dists,
+                                 known_softmax_pred, known_nearest_classes,
+                                 unknown_softmax_probs, unknown_min_dists,
+                                 unknown_softmax_pred, unknown_nearest_classes,
+                                 dist_steps=200):
+    """在固定 softmax 阈值下扫描距离阈值。"""
+    all_scores = np.concatenate([known_min_dists, unknown_min_dists])
+    lo = float(np.min(all_scores))
+    hi = float(np.max(all_scores))
+    thresholds = np.linspace(lo, hi, dist_steps)
+
+    best = {"f1": -1}
+    results = []
+
+    for d_thresh in thresholds:
+        known_accepted = (
+            (known_softmax_probs >= softmax_threshold) &
+            (known_min_dists <= d_thresh) &
+            (known_softmax_pred == known_nearest_classes)
+        )
+        unknown_accepted = (
+            (unknown_softmax_probs >= softmax_threshold) &
+            (unknown_min_dists <= d_thresh) &
+            (unknown_softmax_pred == unknown_nearest_classes)
+        )
+
+        tp = int(np.sum(known_accepted))
+        fn = len(known_softmax_probs) - tp
+        fp = int(np.sum(unknown_accepted))
+        tn = len(unknown_softmax_probs) - fp
+
+        total = tp + fp + tn + fn
+        accuracy = (tp + tn) / total if total > 0 else 0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
+        row = {
+            "softmax_threshold": float(softmax_threshold),
+            "dist_threshold": float(d_thresh),
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "accuracy": accuracy,
+            "tp": tp,
+            "fp": fp,
+            "tn": tn,
+            "fn": fn,
+        }
+        results.append(row)
+
+        if f1 > best["f1"]:
+            best = row
+
+    return results, best
+
+
 # ── 输出函数 ────────────────────────────────────────────────
 
 def save_predictions_csv(output_path, test_rows, unknown_filenames,
@@ -395,6 +460,12 @@ def save_predictions_csv(output_path, test_rows, unknown_filenames,
             "dist_to_c": float(test_distances[i, 2]),
             "embedding_accepted": test_min_dist[i] <= dist_threshold,
             "softmax_accepted": float(np.max(test_softmax_probs[i])) >= softmax_threshold,
+            "class_agree": int(np.argmax(test_softmax_probs[i])) == int(test_nearest[i]),
+            "two_stage_accepted": (
+                float(np.max(test_softmax_probs[i])) >= softmax_threshold and
+                test_min_dist[i] <= dist_threshold and
+                int(np.argmax(test_softmax_probs[i])) == int(test_nearest[i])
+            ),
         })
 
     # 陌生人
@@ -411,6 +482,12 @@ def save_predictions_csv(output_path, test_rows, unknown_filenames,
             "dist_to_c": float(unknown_distances[i, 2]),
             "embedding_accepted": unknown_min_dist[i] <= dist_threshold,
             "softmax_accepted": float(np.max(unknown_softmax_probs[i])) >= softmax_threshold,
+            "class_agree": int(np.argmax(unknown_softmax_probs[i])) == int(unknown_nearest[i]),
+            "two_stage_accepted": (
+                float(np.max(unknown_softmax_probs[i])) >= softmax_threshold and
+                unknown_min_dist[i] <= dist_threshold and
+                int(np.argmax(unknown_softmax_probs[i])) == int(unknown_nearest[i])
+            ),
         })
 
     fieldnames = [
@@ -418,7 +495,7 @@ def save_predictions_csv(output_path, test_rows, unknown_filenames,
         "softmax_pred", "softmax_max_prob",
         "nearest_centroid", "min_distance",
         "dist_to_a", "dist_to_b", "dist_to_c",
-        "embedding_accepted", "softmax_accepted",
+        "embedding_accepted", "softmax_accepted", "class_agree", "two_stage_accepted",
     ]
 
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -487,9 +564,15 @@ def export_c_header(output_path, centroids, threshold):
     lines.append("#ifndef CENTROIDS_CONFIG_H")
     lines.append("#define CENTROIDS_CONFIG_H")
     lines.append("")
-    lines.append(f"#define EMBEDDING_DIM 32")
-    lines.append(f"#define NUM_CLASSES {len(CLASS_NAMES)}")
+    lines.append("#ifndef FACE_EMBEDDING_DIM")
+    lines.append(f"#define FACE_EMBEDDING_DIM 32")
+    lines.append("#endif")
+    lines.append("#ifndef FACE_NUM_CLASSES")
+    lines.append(f"#define FACE_NUM_CLASSES {len(CLASS_NAMES)}")
+    lines.append("#endif")
+    lines.append(f"#define SOFTMAX_THRESHOLD 0.990000f")
     lines.append(f"#define DISTANCE_THRESHOLD {threshold:.6f}f")
+    lines.append(f"#define DISTANCE_THRESHOLD_SQ {(threshold * threshold):.6f}f")
     lines.append("")
     lines.append("/*")
     lines.append(" * 拒识逻辑：")
@@ -498,7 +581,7 @@ def export_c_header(output_path, centroids, threshold):
     lines.append(" *   3. 若最小距离 > DISTANCE_THRESHOLD → 拒绝（unknown）")
     lines.append(" */")
     lines.append("")
-    lines.append("static const float centroids[NUM_CLASSES][EMBEDDING_DIM] = {")
+    lines.append("static const float FACE_CENTROIDS[FACE_NUM_CLASSES][FACE_EMBEDDING_DIM] = {")
 
     for i, class_name in enumerate(CLASS_NAMES):
         vec = centroids[class_name]
@@ -508,7 +591,7 @@ def export_c_header(output_path, centroids, threshold):
 
     lines.append("};")
     lines.append("")
-    lines.append(f'static const char* class_names[NUM_CLASSES] = {{')
+    lines.append(f'static const char* FACE_CLASS_NAMES[FACE_NUM_CLASSES] = {{')
 
     for i, class_name in enumerate(CLASS_NAMES):
         comma = "," if i < len(CLASS_NAMES) - 1 else ""
@@ -639,9 +722,11 @@ def main():
     print("放行条件: softmax_max_prob >= S阈值 AND min_distance <= D阈值")
     print("扫描中 ...")
 
+    test_softmax_pred = np.argmax(softmax_test, axis=1)
+    unknown_softmax_pred = np.argmax(softmax_unknown, axis=1)
     two_stage_results, best_two_stage = two_stage_sweep(
-        test_max_prob, test_min_dist,
-        unknown_max_prob, unknown_min_dist,
+        test_max_prob, test_min_dist, test_softmax_pred, test_nearest,
+        unknown_max_prob, unknown_min_dist, unknown_softmax_pred, unknown_nearest,
         softmax_steps=50, dist_steps=50,
     )
 
@@ -654,6 +739,24 @@ def main():
     print(f"  Accuracy:     {best_two_stage['accuracy']:.4f}")
     print(f"  已知正确接受: {best_two_stage['tp']}/{best_two_stage['tp']+best_two_stage['fn']}")
     print(f"  陌生人正确拒绝: {best_two_stage['tn']}/{best_two_stage['tn']+best_two_stage['fp']}")
+
+    deploy_softmax_threshold = 0.99
+    deploy_results, best_deploy = fixed_softmax_distance_sweep(
+        deploy_softmax_threshold,
+        test_max_prob, test_min_dist, test_softmax_pred, test_nearest,
+        unknown_max_prob, unknown_min_dist, unknown_softmax_pred, unknown_nearest,
+        dist_steps=200,
+    )
+
+    print("\n========== 部署阈值（固定 softmax=0.99） ==========")
+    print(f"{'Softmax阈值':<16} {best_deploy['softmax_threshold']:>10.4f}")
+    print(f"{'距离阈值':<16} {best_deploy['dist_threshold']:>10.4f}")
+    print(f"{'Precision':<16} {best_deploy['precision']:>10.4f}")
+    print(f"{'Recall':<16} {best_deploy['recall']:>10.4f}")
+    print(f"{'F1':<16} {best_deploy['f1']:>10.4f}")
+    print(f"{'Accuracy':<16} {best_deploy['accuracy']:>10.4f}")
+    print(f"{'已知接受':<16} {best_deploy['tp']:>5}/{best_deploy['tp']+best_deploy['fn']:<4}")
+    print(f"{'陌生拒绝':<16} {best_deploy['tn']:>5}/{best_deploy['tn']+best_deploy['fp']:<4}")
 
     # ── 11. 三种方案总对比 ──
     print("\n========== 三种方案总对比 ==========")
@@ -697,6 +800,17 @@ def main():
         emb_sweep, softmax_sweep,
     )
 
+    deploy_csv = OUTPUT_DIR / "deploy_softmax_099_sweep.csv"
+    with open(deploy_csv, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["softmax_threshold", "dist_threshold", "precision", "recall",
+                        "f1", "accuracy", "tp", "fp", "tn", "fn"],
+        )
+        writer.writeheader()
+        writer.writerows(deploy_results)
+    print(f"已保存部署阈值扫描: {deploy_csv}")
+
     # 保存两阶段扫描结果
     two_stage_csv = OUTPUT_DIR / "two_stage_sweep.csv"
     fieldnames_2s = ["softmax_threshold", "dist_threshold", "precision", "recall",
@@ -714,15 +828,15 @@ def main():
 
     export_c_header(
         OUTPUT_DIR / "centroids_config.h",
-        centroids, best_two_stage["dist_threshold"],
+        centroids, best_deploy["dist_threshold"],
     )
 
     # ── 13. ESP32 部署说明 ──
     print("\n========== ESP32 部署说明（两阶段方案） ==========")
     print(f"  推理流程:")
     print(f"    1. 跑完整模型，获取 softmax 概率和 Dense(32) embedding")
-    print(f"    2. 第一关: softmax_max_prob >= {best_two_stage['softmax_threshold']:.4f} ?")
-    print(f"    3. 第二关: min_distance <= {best_two_stage['dist_threshold']:.4f} ?")
+    print(f"    2. 第一关: softmax_max_prob >= {deploy_softmax_threshold:.4f} ?")
+    print(f"    3. 第二关: min_distance <= {best_deploy['dist_threshold']:.4f} ?")
     print(f"    4. 两关都通过 → LED 亮（放行），否则 → LED 灭（拒绝）")
     print(f"")
     print(f"  内存开销:")

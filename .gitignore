@@ -1,16 +1,22 @@
-# 忽略所有内容，除了 face 目录
-/*
-!face/
-!face/**
-!ml_share/
-!ml_share/**
+.idea
+.venv
+.vscode
+__pycache__
+build
+data
+gen
+managed_components
+models
+temp
+dependencies.lock
+sdkconfig
+model.c
+model.h
+test_case.h
+.DS_Store
+.cache/
+sdkconfig.old
 
-# 但 face 目录下的 .DS_Store 等常见无用文件依然忽略
-face/.DS_Store
-face/*.log
-face/*.tmp
-face/data/person_a/
-face/data/person_b/
-face/data/person_c/
-face/data/unknown/
-face/python/gen/
+# Local report and course material files.
+*.pdf
+report/
