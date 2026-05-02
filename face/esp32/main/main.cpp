@@ -257,8 +257,6 @@ void setup(void)
 void loop(void)
 {
     int64_t t_loop_start_us = esp_timer_get_time();
-
-    int64_t t_loop_start_us = esp_timer_get_time();
     poll_stream_command();
 
     // ── 1. 拍照 ──────────────────────────────────────────
@@ -395,7 +393,7 @@ void loop(void)
 
     // ── 7. 串口输出 ─────────────────────────────────────
     // 同时发元数据和原始 RGB565 帧，供 Web Serial 前端直接展示。
-    char metrics_json[256];
+    char metrics_json[512];
     const int metrics_len = snprintf(
         metrics_json,
         sizeof(metrics_json),
