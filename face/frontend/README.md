@@ -36,6 +36,6 @@ idf.py flash
 For every inference loop the device sends:
 
 - `===METRICS===` + one line of JSON recognition data
-- `===FRAME===` + one 320x240 RGB565 frame
+- `===FRAME===` + one JSON header line (`length` + `crc32`) + one 320x240 RGB565 frame
 
 The firmware stays in normal log mode until it receives `START_STREAM\n` over Web Serial.

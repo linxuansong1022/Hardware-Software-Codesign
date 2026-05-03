@@ -4,6 +4,8 @@ const FRAME_WIDTH = 320;
 const FRAME_HEIGHT = 240;
 const FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 2;
 const MAX_LOGS = 80;
+const MAX_BUFFER_RETENTION = FRAME_SIZE * 2;
+const MIN_RENDER_INTERVAL_MS = 160;
 const METRICS_PREAMBLE = new TextEncoder().encode('\n===METRICS===\n');
 const FRAME_PREAMBLE = new TextEncoder().encode('\n===FRAME===\n');
 const START_STREAM_COMMAND = 'START_STREAM\n';
@@ -55,6 +57,20 @@ function decodeAscii(bytes) {
   return new TextDecoder().decode(bytes);
 }
 
+function crc32(frameBytes) {
+  let crc = 0xffffffff;
+
+  for (let i = 0; i < frameBytes.length; i += 1) {
+    crc ^= frameBytes[i];
+    for (let bit = 0; bit < 8; bit += 1) {
+      const mask = -(crc & 1);
+      crc = (crc >>> 1) ^ (0xedb88320 & mask);
+    }
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function rgb565ToImageData(frameBytes) {
   const imageData = new ImageData(FRAME_WIDTH, FRAME_HEIGHT);
   const rgba = imageData.data;
@@ -82,6 +98,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('');
   const [frameCounter, setFrameCounter] = useState(0);
   const [frameReceived, setFrameReceived] = useState(false);
+  const [droppedFrames, setDroppedFrames] = useState(0);
 
   const canvasRef = useRef(null);
   const canvasContextRef = useRef(null);
@@ -90,6 +107,10 @@ export default function App() {
   const readLoopActiveRef = useRef(false);
   const startStreamTimerRef = useRef(null);
   const frameReceivedRef = useRef(false);
+  const frameHeaderRef = useRef(null);
+  const pendingFrameRef = useRef(null);
+  const renderScheduledRef = useRef(false);
+  const lastRenderAtRef = useRef(0);
 
   const accessGranted = useMemo(() => metrics.vote !== 'UNKNOWN' && metrics.vote !== 'WAITING', [metrics.vote]);
 
@@ -139,6 +160,33 @@ export default function App() {
     setFrameCounter((count) => count + 1);
   }
 
+  function scheduleQueuedFrameRender() {
+    if (renderScheduledRef.current) return;
+
+    renderScheduledRef.current = true;
+    const now = performance.now();
+    const waitMs = Math.max(0, MIN_RENDER_INTERVAL_MS - (now - lastRenderAtRef.current));
+
+    window.setTimeout(() => {
+      renderScheduledRef.current = false;
+      const nextFrame = pendingFrameRef.current;
+      if (!nextFrame) return;
+
+      pendingFrameRef.current = null;
+      lastRenderAtRef.current = performance.now();
+      renderFrame(nextFrame);
+
+      if (pendingFrameRef.current) {
+        scheduleQueuedFrameRender();
+      }
+    }, waitMs);
+  }
+
+  function queueVerifiedFrame(frameBytes) {
+    pendingFrameRef.current = frameBytes;
+    scheduleQueuedFrameRender();
+  }
+
   function consumeTextPrefix(prefixBytes) {
     const prefixText = decodeAscii(prefixBytes);
     if (prefixText.includes('===READY===') || prefixText.includes('START_STREAM')) {
@@ -179,12 +227,61 @@ export default function App() {
       }
 
       if (parserStateRef.current === 'frame') {
-        if (buffer.length < FRAME_SIZE) return;
+        const frameHeader = frameHeaderRef.current;
+        if (!frameHeader) {
+          parserStateRef.current = 'seek';
+          continue;
+        }
 
-        const frameBytes = buffer.slice(0, FRAME_SIZE);
-        serialBufferRef.current = buffer.slice(FRAME_SIZE);
+        if (buffer.length < frameHeader.length) return;
+
+        const frameBytes = buffer.slice(0, frameHeader.length);
+        serialBufferRef.current = buffer.slice(frameHeader.length);
         parserStateRef.current = 'seek';
-        renderFrame(frameBytes);
+        frameHeaderRef.current = null;
+
+        const actualCrc32 = crc32(frameBytes).toString(16).padStart(8, '0');
+        if (actualCrc32 !== frameHeader.crc32) {
+          setDroppedFrames((count) => count + 1);
+          setSerialStatus('Streaming from ESP32 hardware (dropping corrupt frame)');
+          pushLog(`Dropped corrupt frame (expected crc ${frameHeader.crc32}, got ${actualCrc32}).`);
+          continue;
+        }
+
+        setSerialStatus('Streaming from ESP32 hardware');
+        queueVerifiedFrame(frameBytes);
+        continue;
+      }
+
+      if (parserStateRef.current === 'frameHeader') {
+        const newlineIndex = buffer.indexOf(0x0a);
+        if (newlineIndex === -1) return;
+
+        const lineBytes = buffer.slice(0, newlineIndex);
+        serialBufferRef.current = buffer.slice(newlineIndex + 1);
+        parserStateRef.current = 'seek';
+
+        const line = decodeAscii(lineBytes).trim();
+        if (!line) {
+          pushLog('Skipped empty frame header.');
+          continue;
+        }
+
+        try {
+          const parsed = JSON.parse(line);
+          const length = Number(parsed.length);
+          const headerCrc32 = String(parsed.crc32 || '').toLowerCase();
+
+          if (!Number.isInteger(length) || length <= 0 || length > FRAME_SIZE || !/^[0-9a-f]{8}$/.test(headerCrc32)) {
+            throw new Error('invalid frame header');
+          }
+
+          frameHeaderRef.current = { length, crc32: headerCrc32 };
+          parserStateRef.current = 'frame';
+        } catch {
+          setDroppedFrames((count) => count + 1);
+          pushLog(`Invalid frame header: ${line}`);
+        }
         continue;
       }
 
@@ -193,7 +290,7 @@ export default function App() {
       const candidateIndexes = [metricsIndex, frameIndex].filter((value) => value >= 0);
 
       if (candidateIndexes.length === 0) {
-        if (buffer.length > 2048) {
+        if (buffer.length > MAX_BUFFER_RETENTION) {
           consumeTextPrefix(buffer.slice(0, buffer.length - 256));
           serialBufferRef.current = buffer.slice(buffer.length - 256);
         }
@@ -210,7 +307,7 @@ export default function App() {
         parserStateRef.current = 'metrics';
       } else {
         serialBufferRef.current = buffer.slice(nextIndex + FRAME_PREAMBLE.length);
-        parserStateRef.current = 'frame';
+        parserStateRef.current = 'frameHeader';
       }
     }
   }
@@ -249,9 +346,14 @@ export default function App() {
     setMetrics(initialMetrics);
     setFrameCounter(0);
     setFrameReceived(false);
+    setDroppedFrames(0);
     frameReceivedRef.current = false;
     serialBufferRef.current = new Uint8Array(0);
     parserStateRef.current = 'seek';
+    frameHeaderRef.current = null;
+    pendingFrameRef.current = null;
+    renderScheduledRef.current = false;
+    lastRenderAtRef.current = 0;
 
     try {
       const nextPort = await navigator.serial.requestPort();
@@ -319,6 +421,7 @@ export default function App() {
           </span>
           <span className="pill pill-neutral">{serialStatus}</span>
           <span className="pill pill-neutral">Frames: {frameCounter}</span>
+          <span className="pill pill-neutral">Dropped: {droppedFrames}</span>
         </div>
       </header>
 
@@ -407,11 +510,11 @@ export default function App() {
             <div className="info-grid">
               <div>
                 <span className="mini-label">Protocol</span>
-                <p>ESP32 now sends one JSON metrics block plus one 320x240 RGB565 frame for each inference loop.</p>
+                <p>ESP32 now sends one JSON metrics block plus one CRC-checked 320x240 RGB565 frame for each inference loop.</p>
               </div>
               <div>
                 <span className="mini-label">Port usage</span>
-                <p>Close `idf.py monitor` before opening the webpage, otherwise the USB serial port stays busy.</p>
+                <p>Close `idf.py monitor` before opening the webpage, otherwise the USB serial port stays busy and can interfere with clean streaming.</p>
               </div>
             </div>
 

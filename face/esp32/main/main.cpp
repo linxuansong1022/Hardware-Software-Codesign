@@ -20,6 +20,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
+#include <cinttypes>
 
 // ESP-IDF 系统头文件
 #include "freertos/FreeRTOS.h"  // 实时操作系统（ESP32 的底层调度系统）
@@ -98,6 +100,26 @@ static float embedding[FACE_EMBEDDING_DIM];
 static int vote_buffer[VOTE_WINDOW];
 static int vote_idx = 0;
 static bool stream_enabled = false;
+
+static uint32_t crc32_update(uint32_t crc, const uint8_t *data, size_t length)
+{
+    crc = ~crc;
+    for (size_t i = 0; i < length; ++i)
+    {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; ++bit)
+        {
+            const uint32_t mask = static_cast<uint32_t>(-(static_cast<int32_t>(crc & 1U)));
+            crc = (crc >> 1) ^ (0xEDB88320U & mask);
+        }
+    }
+    return ~crc;
+}
+
+static uint32_t crc32_bytes(const uint8_t *data, size_t length)
+{
+    return crc32_update(0U, data, length);
+}
 
 static void serial_write_all(const uint8_t *data, size_t length)
 {
@@ -362,28 +384,31 @@ void loop(void)
     const char *frame_name = (frame_result >= 0) ? CLASS_NAMES[frame_result] : "UNKNOWN";
     const char *vote_name = access_granted ? CLASS_NAMES[vote_winner] : "UNKNOWN";
 
-    ESP_LOGI(TAG,
-             "Frame: %s (%.2f, dist_sq=%.3f, nearest=%s) | Vote: %s (%d/%d) | "
-             "[A=%.3f B=%.3f C=%.3f] | gates[S=%d D=%d C=%d]",
-             frame_name, max_score,
-             min_dist_sq, CLASS_NAMES[nearest_centroid],
-             vote_name, vote_max_count, VOTE_WINDOW,
-             prediction[0], prediction[1], prediction[2],
-             softmax_ok, distance_ok, class_agree);
-
     int64_t capture_ms = (t_capture_done_us - t_loop_start_us) / 1000;
     int64_t preprocess_ms = (t_preprocess_done_us - t_capture_done_us) / 1000;
     int64_t inference_ms = (t_inference_done_us - t_preprocess_done_us) / 1000;
     int64_t total_ms = (esp_timer_get_time() - t_loop_start_us) / 1000;
     float fps = total_ms > 0 ? 1000.0f / (float)total_ms : 0.0f;
 
-    ESP_LOGI(TAG,
-             "timing_ms[capture=%lld preprocess=%lld inference=%lld total=%lld fps=%.2f]",
-             (long long)capture_ms,
-             (long long)preprocess_ms,
-             (long long)inference_ms,
-             (long long)total_ms,
-             fps);
+    if (!stream_enabled)
+    {
+        ESP_LOGI(TAG,
+                 "Frame: %s (%.2f, dist_sq=%.3f, nearest=%s) | Vote: %s (%d/%d) | "
+                 "[A=%.3f B=%.3f C=%.3f] | gates[S=%d D=%d C=%d]",
+                 frame_name, max_score,
+                 min_dist_sq, CLASS_NAMES[nearest_centroid],
+                 vote_name, vote_max_count, VOTE_WINDOW,
+                 prediction[0], prediction[1], prediction[2],
+                 softmax_ok, distance_ok, class_agree);
+
+        ESP_LOGI(TAG,
+                 "timing_ms[capture=%lld preprocess=%lld inference=%lld total=%lld fps=%.2f]",
+                 (long long)capture_ms,
+                 (long long)preprocess_ms,
+                 (long long)inference_ms,
+                 (long long)total_ms,
+                 fps);
+    }
 
     if (!stream_enabled)
     {
@@ -427,7 +452,20 @@ void loop(void)
         serial_write_all(reinterpret_cast<const uint8_t *>(metrics_json), static_cast<size_t>(metrics_len));
     }
 
+    const uint32_t frame_crc32 = crc32_bytes(image_buffer, FRAME_SIZE_BYTES);
+    char frame_header[96];
+    const int frame_header_len = snprintf(
+        frame_header,
+        sizeof(frame_header),
+        "{\"length\":%u,\"crc32\":\"%08" PRIx32 "\"}\n",
+        static_cast<unsigned>(FRAME_SIZE_BYTES),
+        frame_crc32);
+
     serial_write_text(FRAME_PREAMBLE);
+    if (frame_header_len > 0)
+    {
+        serial_write_all(reinterpret_cast<const uint8_t *>(frame_header), static_cast<size_t>(frame_header_len));
+    }
     serial_write_all(image_buffer, FRAME_SIZE_BYTES);
 }
 
