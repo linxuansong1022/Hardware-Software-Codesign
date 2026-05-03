@@ -521,38 +521,54 @@ export default function App() {
 
         <header className="user-topbar panel">
           <div>
-            <p className="eyebrow">User View</p>
-            <h1>Face Access Portal</h1>
+            <p className="eyebrow">Access Terminal</p>
+            <h1>Entry Verification</h1>
           </div>
           <div className="user-topbar-actions">
             <span className={`pill ${accessGranted ? 'pill-success' : 'pill-danger'}`}>
-              {accessGranted ? 'ACCESS GRANTED' : 'ACCESS LOCKED'}
+              {accessGranted ? 'ENTRY AUTHORIZED' : 'ENTRY DENIED'}
             </span>
             <button
               className={port ? 'ghost-button' : 'primary-button'}
               onClick={port ? disconnectSerial : connectSerial}
               disabled={connecting}
             >
-              {connecting ? 'Connecting...' : port ? 'Disconnect serial' : 'Connect ESP32'}
+              {connecting ? 'Connecting...' : port ? 'Disconnect device' : 'Connect device'}
             </button>
           </div>
         </header>
 
         <main className="user-layout">
           <section className="panel user-video-panel">
+            <div className="user-panel-header">
+              <div>
+                <p className="section-kicker">Live Camera</p>
+                <h2>Entrance camera stream</h2>
+              </div>
+              <span className="pill pill-neutral">{serialStatus}</span>
+            </div>
+
             <div className={`camera-stage user-camera-stage ${accessGranted ? 'camera-stage-allow' : 'camera-stage-deny'}`}>
               <canvas ref={canvasRef} width={FRAME_WIDTH} height={FRAME_HEIGHT} className="hardware-canvas" />
               {!frameReceived && (
                 <div className="camera-placeholder">
-                  <p>The live stream will appear here after the ESP32 is connected.</p>
-                  <span>Open `/monitor` for the full diagnostics dashboard.</span>
+                  <p>The live stream will appear here after the device is connected.</p>
+                  <span>Open `/monitor` for the full operator console and diagnostic details.</span>
                 </div>
               )}
 
+              <div className="user-access-center">
+                <div className={`user-access-center-card ${accessGranted ? 'user-access-center-allow' : 'user-access-center-deny'}`}>
+                  <span className="overlay-label">Entry decision</span>
+                  <strong>{accessGranted ? 'AUTHORIZED' : 'DENIED'}</strong>
+                  <small>{accessGranted ? prettyName(metrics.vote) : 'No verified identity'}</small>
+                </div>
+              </div>
+
               <div className={`user-access-banner ${accessGranted ? 'user-access-banner-allow' : 'user-access-banner-deny'}`}>
-                <span className="overlay-label">Door access</span>
-                <strong>{accessGranted ? prettyName(metrics.vote) : 'LOCKED'}</strong>
-                <small>{serialStatus}</small>
+                <span className="overlay-label">Session state</span>
+                <strong>{serialStatus}</strong>
+                <small>{accessGranted ? 'Verified identity accepted by the device.' : 'Awaiting a valid identity match for release.'}</small>
               </div>
             </div>
           </section>
@@ -570,75 +586,39 @@ export default function App() {
 
       <header className="topbar">
         <div>
-          <p className="eyebrow">ESP32 Hardware Stream</p>
-          <h1>Face Access Dashboard</h1>
+          <p className="eyebrow">Operator Console</p>
+          <h1>Embedded Access Control Monitor</h1>
         </div>
         <div className="status-cluster">
           <span className={`pill ${accessGranted ? 'pill-success' : 'pill-danger'}`}>
-            {accessGranted ? `ACCESS: ${prettyName(metrics.vote)}` : 'ACCESS: LOCKED'}
+            {accessGranted ? `AUTHORIZED: ${prettyName(metrics.vote)}` : 'STATUS: DENIED'}
           </span>
-          <span className="pill pill-neutral">{serialStatus}</span>
+          <span className="pill pill-neutral">Link: {serialStatus}</span>
           <span className="pill pill-neutral">Frames: {frameCounter}</span>
           <span className="pill pill-neutral">Dropped: {droppedFrames}</span>
         </div>
       </header>
 
-      <main className="layout-grid">
-        <section className="camera-panel panel">
-          <div className="panel-header">
-            <div>
-              <p className="section-kicker">Hardware video</p>
-              <h2>ESP32 camera feed</h2>
-            </div>
-            <button
-              className={port ? 'ghost-button' : 'primary-button'}
-              onClick={port ? disconnectSerial : connectSerial}
-              disabled={connecting}
-            >
-              {connecting ? 'Connecting...' : port ? 'Disconnect serial' : 'Connect ESP32'}
-            </button>
-          </div>
-
-          <div className={`camera-stage ${accessGranted ? 'camera-stage-allow' : 'camera-stage-deny'}`}>
-            <canvas ref={canvasRef} width={FRAME_WIDTH} height={FRAME_HEIGHT} className="hardware-canvas" />
-            {!frameReceived && (
-              <div className="camera-placeholder">
-                <p>The large screen will show frames coming from the ESP32 camera.</p>
-                <span>Click Connect ESP32 after flashing the updated firmware and closing `idf.py monitor`.</span>
-              </div>
-            )}
-            <div className="camera-overlay">
-              <div>
-                <span className="overlay-label">Current frame</span>
-                <strong>{prettyName(metrics.frame)}</strong>
-              </div>
-              <div>
-                <span className="overlay-label">Confidence</span>
-                <strong>{formatPercent(metrics.frameConfidence)}</strong>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="side-panel">
-          <div className="panel metrics-panel">
+      <main className="monitor-layout">
+        <section className="monitor-column monitor-column-side">
+          <section className="panel metrics-panel monitor-card monitor-metrics">
             <div className="panel-header compact-header">
               <div>
-                <p className="section-kicker">Recognition</p>
-                <h2>Realtime hardware result</h2>
+                <p className="section-kicker">Recognition Output</p>
+                <h2>Realtime classification state</h2>
               </div>
             </div>
 
             <div className="hero-metric-row">
               <article className="hero-card">
-                <span>Vote result</span>
+                <span>Vote decision</span>
                 <strong>{prettyName(metrics.vote)}</strong>
-                <small>{metrics.voteCount}/{metrics.voteWindow} frames passed</small>
+                <small>{metrics.voteCount}/{metrics.voteWindow} frames accepted in the current vote window</small>
               </article>
               <article className="hero-card muted-card">
-                <span>Frame result</span>
+                <span>Frame decision</span>
                 <strong>{prettyName(metrics.frame)}</strong>
-                <small>{formatPercent(metrics.frameConfidence)} confidence</small>
+                <small>{formatPercent(metrics.frameConfidence)} single-frame confidence</small>
               </article>
             </div>
 
@@ -655,13 +635,13 @@ export default function App() {
                 </div>
               ))}
             </div>
-          </div>
+          </section>
 
-          <div className="panel decision-panel">
+          <section className="panel decision-panel monitor-card monitor-decision">
             <div className="panel-header compact-header">
               <div>
-                <p className="section-kicker">Decision</p>
-                <h2>Open-set rejection path</h2>
+                <p className="section-kicker">Decision Audit</p>
+                <h2>Open-set rejection trace</h2>
               </div>
             </div>
 
@@ -672,11 +652,11 @@ export default function App() {
 
             <div className="decision-grid">
               <article className="decision-stat">
-                <span className="mini-label">Frame result</span>
+                <span className="mini-label">Frame decision</span>
                 <strong>{prettyName(metrics.frame)}</strong>
               </article>
               <article className="decision-stat">
-                <span className="mini-label">Vote result</span>
+                <span className="mini-label">Vote decision</span>
                 <strong>{prettyName(metrics.vote)}</strong>
               </article>
               <article className="decision-stat">
@@ -692,7 +672,7 @@ export default function App() {
                 <strong>{prettyName(metrics.nearest)}</strong>
               </article>
               <article className="decision-stat">
-                <span className="mini-label">Distance sq</span>
+                <span className="mini-label">Distance squared</span>
                 <strong>{formatDist(metrics.distSq)}</strong>
               </article>
             </div>
@@ -716,12 +696,52 @@ export default function App() {
                 <strong>{metrics.voteCount}/{metrics.voteWindow}</strong>
               </div>
             </div>
-          </div>
+          </section>
+        </section>
 
-          <div className="panel timing-panel">
+        <section className="monitor-column monitor-column-center">
+          <section className="camera-panel panel monitor-card monitor-video">
+            <div className="panel-header">
+              <div>
+                <p className="section-kicker">Camera Stream</p>
+                <h2>ESP32 live acquisition</h2>
+              </div>
+              <button
+                className={port ? 'ghost-button' : 'primary-button'}
+                onClick={port ? disconnectSerial : connectSerial}
+                disabled={connecting}
+              >
+                {connecting ? 'Connecting...' : port ? 'Disconnect device' : 'Connect device'}
+              </button>
+            </div>
+
+            <div className={`camera-stage ${accessGranted ? 'camera-stage-allow' : 'camera-stage-deny'}`}>
+              <canvas ref={canvasRef} width={FRAME_WIDTH} height={FRAME_HEIGHT} className="hardware-canvas" />
+              {!frameReceived && (
+                <div className="camera-placeholder">
+                  <p>The live stream will appear here after the ESP32 device is connected.</p>
+                  <span>Flash the updated firmware and close `idf.py monitor` before opening the Web Serial link.</span>
+                </div>
+              )}
+              <div className="camera-overlay">
+                <div>
+                  <span className="overlay-label">Frame classification</span>
+                  <strong>{prettyName(metrics.frame)}</strong>
+                </div>
+                <div>
+                  <span className="overlay-label">Model confidence</span>
+                  <strong>{formatPercent(metrics.frameConfidence)}</strong>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section className="monitor-column monitor-column-side monitor-column-side-right">
+          <section className="panel timing-panel monitor-card monitor-timing">
             <div className="panel-header compact-header">
               <div>
-                <p className="section-kicker">Deployment</p>
+                <p className="section-kicker">Deployment Runtime</p>
                 <h2>ESP32 timing and throughput</h2>
               </div>
             </div>
@@ -735,24 +755,24 @@ export default function App() {
                 </article>
               ))}
             </div>
-          </div>
+          </section>
 
-          <div className="panel raw-panel">
+          <section className="panel raw-panel monitor-card monitor-notes">
             <div className="panel-header compact-header">
               <div>
-                <p className="section-kicker">Serial feed</p>
-                <h2>Hardware stream notes</h2>
+                <p className="section-kicker">System Notes</p>
+                <h2>Interface and diagnostics</h2>
               </div>
             </div>
 
             <div className="info-grid">
               <div>
                 <span className="mini-label">Protocol</span>
-                <p>ESP32 now sends one JSON metrics block plus one CRC-checked 320x240 RGB565 frame for each inference loop.</p>
+                <p>Each inference cycle sends one JSON metrics block followed by one CRC-checked 320x240 RGB565 frame.</p>
               </div>
               <div>
-                <span className="mini-label">Port usage</span>
-                <p>Close `idf.py monitor` before opening the webpage, otherwise the USB serial port stays busy and can interfere with clean streaming.</p>
+                <span className="mini-label">Serial ownership</span>
+                <p>Close `idf.py monitor` before opening the webpage, otherwise the USB serial port remains busy and interferes with streaming.</p>
               </div>
             </div>
 
@@ -760,14 +780,14 @@ export default function App() {
 
             <div className="log-console">
               {logs.length === 0 ? (
-                <p className="log-empty">Boot logs and parser messages from the ESP32 stream will appear here.</p>
+                <p className="log-empty">Boot logs, parser events, and serial diagnostics will appear here.</p>
               ) : (
                 logs.map((line, index) => (
                   <div key={`${line}-${index}`} className="log-line">{line}</div>
                 ))
               )}
             </div>
-          </div>
+          </section>
         </section>
       </main>
     </div>
