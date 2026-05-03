@@ -6,6 +6,7 @@ const FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 2;
 const MAX_LOGS = 80;
 const MAX_BUFFER_RETENTION = FRAME_SIZE * 2;
 const MIN_RENDER_INTERVAL_MS = 160;
+const TIMING_HISTORY_LIMIT = 20;
 const METRICS_PREAMBLE = new TextEncoder().encode('\n===METRICS===\n');
 const FRAME_PREAMBLE = new TextEncoder().encode('\n===FRAME===\n');
 const START_STREAM_COMMAND = 'START_STREAM\n';
@@ -27,6 +28,57 @@ function prettyName(name) {
 
 function formatPercent(value) {
   return `${Math.round((value || 0) * 100)}%`;
+}
+
+function formatMs(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '--';
+  return `${Math.round(value)} ms`;
+}
+
+function formatFps(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '--';
+  return `${value.toFixed(1)} FPS`;
+}
+
+function formatDist(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '--';
+  return value.toFixed(3);
+}
+
+function appendNumericHistory(history, value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return history;
+  }
+
+  return [...history.slice(-(TIMING_HISTORY_LIMIT - 1)), value];
+}
+
+function average(values) {
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function buildDecisionSummary(metrics) {
+  const gates = metrics.gates || {};
+  const failingGates = [
+    !gates.softmax && 'softmax gate',
+    !gates.distance && 'distance gate',
+    !gates.classAgreement && 'class agreement gate',
+  ].filter(Boolean);
+
+  if (metrics.vote && metrics.vote !== 'UNKNOWN' && metrics.vote !== 'WAITING') {
+    return `Known identity accepted as ${prettyName(metrics.vote)} after ${metrics.voteCount}/${metrics.voteWindow} vote consensus.`;
+  }
+
+  if (failingGates.length > 0) {
+    return `Open-set rejection triggered by ${failingGates.join(', ')}.`;
+  }
+
+  if (metrics.frame && metrics.frame !== 'UNKNOWN' && metrics.frame !== 'WAITING') {
+    return `Single-frame prediction is ${prettyName(metrics.frame)}, but the vote window has not reached the acceptance threshold yet.`;
+  }
+
+  return 'System is waiting for enough stable evidence to classify this face as a known person.';
 }
 
 function concatUint8(a, b) {
@@ -88,6 +140,8 @@ function rgb565ToImageData(frameBytes) {
 }
 
 export default function App() {
+  const pathname = typeof window !== 'undefined' ? window.location.pathname.replace(/\/+$/, '') || '/' : '/';
+  const isUserView = pathname === '/user';
   const [serialSupported] = useState(() => 'serial' in navigator);
   const [port, setPort] = useState(null);
   const [reader, setReader] = useState(null);
@@ -99,6 +153,13 @@ export default function App() {
   const [frameCounter, setFrameCounter] = useState(0);
   const [frameReceived, setFrameReceived] = useState(false);
   const [droppedFrames, setDroppedFrames] = useState(0);
+  const [timingHistory, setTimingHistory] = useState({
+    capture: [],
+    preprocess: [],
+    inference: [],
+    total: [],
+    fps: [],
+  });
 
   const canvasRef = useRef(null);
   const canvasContextRef = useRef(null);
@@ -220,6 +281,13 @@ export default function App() {
         try {
           const parsed = JSON.parse(line);
           setMetrics(parsed);
+          setTimingHistory((current) => ({
+            capture: appendNumericHistory(current.capture, parsed.timingMs?.capture),
+            preprocess: appendNumericHistory(current.preprocess, parsed.timingMs?.preprocess),
+            inference: appendNumericHistory(current.inference, parsed.timingMs?.inference),
+            total: appendNumericHistory(current.total, parsed.timingMs?.total),
+            fps: appendNumericHistory(current.fps, parsed.timingMs?.fps),
+          }));
         } catch {
           pushLog(`Invalid metrics JSON: ${line}`);
         }
@@ -347,6 +415,13 @@ export default function App() {
     setFrameCounter(0);
     setFrameReceived(false);
     setDroppedFrames(0);
+    setTimingHistory({
+      capture: [],
+      preprocess: [],
+      inference: [],
+      total: [],
+      fps: [],
+    });
     frameReceivedRef.current = false;
     serialBufferRef.current = new Uint8Array(0);
     parserStateRef.current = 'seek';
@@ -404,6 +479,89 @@ export default function App() {
     { label: 'Person B', value: metrics.scores?.B || 0, color: 'var(--accent-b)' },
     { label: 'Person C', value: metrics.scores?.C || 0, color: 'var(--accent-c)' },
   ];
+  const gateCards = [
+    { key: 'softmax', label: 'Softmax', pass: Boolean(metrics.gates?.softmax) },
+    { key: 'distance', label: 'Distance', pass: Boolean(metrics.gates?.distance) },
+    { key: 'classAgreement', label: 'Class Agreement', pass: Boolean(metrics.gates?.classAgreement) },
+  ];
+  const decisionSummary = buildDecisionSummary(metrics);
+  const timingCards = [
+    {
+      label: 'Capture',
+      value: formatMs(metrics.timingMs?.capture),
+      average: formatMs(average(timingHistory.capture)),
+    },
+    {
+      label: 'Preprocess',
+      value: formatMs(metrics.timingMs?.preprocess),
+      average: formatMs(average(timingHistory.preprocess)),
+    },
+    {
+      label: 'Inference',
+      value: formatMs(metrics.timingMs?.inference),
+      average: formatMs(average(timingHistory.inference)),
+    },
+    {
+      label: 'Total',
+      value: formatMs(metrics.timingMs?.total),
+      average: formatMs(average(timingHistory.total)),
+    },
+    {
+      label: 'FPS',
+      value: formatFps(metrics.timingMs?.fps),
+      average: formatFps(average(timingHistory.fps)),
+    },
+  ];
+
+  if (isUserView) {
+    return (
+      <div className="app-shell user-app-shell">
+        <div className="ambient ambient-left" />
+        <div className="ambient ambient-right" />
+
+        <header className="user-topbar panel">
+          <div>
+            <p className="eyebrow">User View</p>
+            <h1>Face Access Portal</h1>
+          </div>
+          <div className="user-topbar-actions">
+            <span className={`pill ${accessGranted ? 'pill-success' : 'pill-danger'}`}>
+              {accessGranted ? 'ACCESS GRANTED' : 'ACCESS LOCKED'}
+            </span>
+            <button
+              className={port ? 'ghost-button' : 'primary-button'}
+              onClick={port ? disconnectSerial : connectSerial}
+              disabled={connecting}
+            >
+              {connecting ? 'Connecting...' : port ? 'Disconnect serial' : 'Connect ESP32'}
+            </button>
+          </div>
+        </header>
+
+        <main className="user-layout">
+          <section className="panel user-video-panel">
+            <div className={`camera-stage user-camera-stage ${accessGranted ? 'camera-stage-allow' : 'camera-stage-deny'}`}>
+              <canvas ref={canvasRef} width={FRAME_WIDTH} height={FRAME_HEIGHT} className="hardware-canvas" />
+              {!frameReceived && (
+                <div className="camera-placeholder">
+                  <p>The live stream will appear here after the ESP32 is connected.</p>
+                  <span>Open `/monitor` for the full diagnostics dashboard.</span>
+                </div>
+              )}
+
+              <div className={`user-access-banner ${accessGranted ? 'user-access-banner-allow' : 'user-access-banner-deny'}`}>
+                <span className="overlay-label">Door access</span>
+                <strong>{accessGranted ? prettyName(metrics.vote) : 'LOCKED'}</strong>
+                <small>{serialStatus}</small>
+              </div>
+            </div>
+          </section>
+
+          {errorMessage && <div className="error-box user-error-box">{errorMessage}</div>}
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -495,6 +653,86 @@ export default function App() {
                     <div className="score-bar-fill" style={{ width: `${score.value * 100}%`, background: score.color }} />
                   </div>
                 </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="panel decision-panel">
+            <div className="panel-header compact-header">
+              <div>
+                <p className="section-kicker">Decision</p>
+                <h2>Open-set rejection path</h2>
+              </div>
+            </div>
+
+            <div className="decision-summary-card">
+              <span className="mini-label">Current interpretation</span>
+              <p>{decisionSummary}</p>
+            </div>
+
+            <div className="decision-grid">
+              <article className="decision-stat">
+                <span className="mini-label">Frame result</span>
+                <strong>{prettyName(metrics.frame)}</strong>
+              </article>
+              <article className="decision-stat">
+                <span className="mini-label">Vote result</span>
+                <strong>{prettyName(metrics.vote)}</strong>
+              </article>
+              <article className="decision-stat">
+                <span className="mini-label">Frame confidence</span>
+                <strong>{formatPercent(metrics.frameConfidence)}</strong>
+              </article>
+              <article className="decision-stat">
+                <span className="mini-label">Vote window</span>
+                <strong>{metrics.voteCount}/{metrics.voteWindow}</strong>
+              </article>
+              <article className="decision-stat">
+                <span className="mini-label">Nearest centroid</span>
+                <strong>{prettyName(metrics.nearest)}</strong>
+              </article>
+              <article className="decision-stat">
+                <span className="mini-label">Distance sq</span>
+                <strong>{formatDist(metrics.distSq)}</strong>
+              </article>
+            </div>
+
+            <div className="gate-grid">
+              {gateCards.map((gate) => (
+                <div key={gate.key} className={`gate-card ${gate.pass ? 'gate-pass' : 'gate-fail'}`}>
+                  <span className="mini-label">{gate.label}</span>
+                  <strong>{gate.pass ? 'PASS' : 'FAIL'}</strong>
+                </div>
+              ))}
+            </div>
+
+            <div className="micro-trend-row">
+              <div className="micro-stat">
+                <span className="mini-label">Current confidence</span>
+                <strong>{formatPercent(metrics.frameConfidence)}</strong>
+              </div>
+              <div className="micro-stat">
+                <span className="mini-label">Vote progress</span>
+                <strong>{metrics.voteCount}/{metrics.voteWindow}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="panel timing-panel">
+            <div className="panel-header compact-header">
+              <div>
+                <p className="section-kicker">Deployment</p>
+                <h2>ESP32 timing and throughput</h2>
+              </div>
+            </div>
+
+            <div className="timing-grid">
+              {timingCards.map((card) => (
+                <article key={card.label} className="timing-card">
+                  <span className="mini-label">{card.label}</span>
+                  <strong>{card.value}</strong>
+                  <small>Recent avg {card.average}</small>
+                </article>
               ))}
             </div>
           </div>
