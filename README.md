@@ -130,9 +130,9 @@ outputs:
 Run from the repository root:
 
 ```bash
-python ml_share/ml_scripts/10quantize_gray48_cnn_center_int8.py
-python ml_share/ml_scripts/11eval_gray48_cnn_center_int8.py
-python ml_share/ml_scripts/12export_tflite_to_c_array.py
+python3 ml_share/ml_scripts/10quantize_gray48_cnn_center_int8.py
+python3 ml_share/ml_scripts/11eval_gray48_cnn_center_int8.py
+python3 ml_share/ml_scripts/12export_tflite_to_c_array.py
 ```
 
 Use a Python environment with TensorFlow and the required ML packages installed.
@@ -158,8 +158,7 @@ Run from the repository root:
 
 ```bash
 cd face/esp32
-source /Users/songlinxuan/esp/esp-idf/export.sh
-export PATH=/Users/songlinxuan/.espressif/python_env/idf6.1_py3.14_env/bin:$PATH
+source /path/to/esp-idf/export.sh
 idf.py build
 ```
 
@@ -169,6 +168,7 @@ Flash and monitor:
 idf.py -p /dev/cu.usbmodemXXXX flash monitor
 ```
 
+Replace `/path/to/esp-idf/export.sh` with the local ESP-IDF installation path.
 On macOS, check the available serial ports with:
 
 ```bash
