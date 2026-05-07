@@ -1,156 +1,50 @@
-// ============================================================================
-// preprocess.cpp — 图片预处理实现
-//
-// 把摄像头的 320×240 RGB565 原始帧转成模型需要的 48×48 灰度 float。
-//
-// 处理流程：
-//   1. 中心裁剪：320×240 → 240×240（去掉左右各 40 列）
-//   2. 区域平均缩放：240×240 → 48×48（每 5×5 像素块取平均）
-//   3. 归一化：0~255 整数 → 0.0~1.0 浮点数
-//
-// 裁剪和缩放在同一个循环里完成，不需要额外的中间缓冲区。
-// ============================================================================
-
 #include "preprocess.h"
 
-// ── 裁剪参数 ─────────────────────────────────────────────
-// 摄像头输出 320×240，我们要裁出中间 240×240 的正方形
-// 240 是因为 240 ÷ 48 = 5，刚好整除，方便做区域平均
-//
-// 裁剪示意：
-//   |--40--|-------- 240 --------|--40--|
-//   | 丢弃  |      保留（人脸在中间） | 丢弃  |
-//
-static const int CROP_SIZE = 240;                          // 裁剪后的正方形边长
-static const int CROP_X_OFFSET = (CAMERA_W - CROP_SIZE) / 2;  // 左边丢掉 40 列
-static const int CROP_Y_OFFSET = (CAMERA_H - CROP_SIZE) / 2;  // 上下各丢掉 0 列（240 刚好）
-static const int BLOCK_SIZE = CROP_SIZE / FACE_W;              // = 5，每个输出像素对应 5×5 的输入块
+static const int CROP_SIZE = 240;
+static const int CROP_X_OFFSET = (CAMERA_W - CROP_SIZE) / 2;
+static const int CROP_Y_OFFSET = (CAMERA_H - CROP_SIZE) / 2;
+static const int BLOCK_SIZE = CROP_SIZE / FACE_W;
 
-// ============================================================================
-// rgb565_to_gray() — 从 RGB565 的 2 字节提取灰度值
-//
-// RGB565 格式（16 bit = 2 字节）：
-//
-//   字节 0（高字节）    字节 1（低字节）
-//   R R R R R G G G    G G G B B B B B
-//   ├─ 5 bit ─┤├ 3 ┤    ├ 3 ┤├─ 5 bit ─┤
-//              └─ 6 bit 绿 ─┘
-//
-// 提取步骤：
-//   1. 两字节合成一个 16-bit 整数
-//   2. 用位移和掩码提取 R(5bit), G(6bit), B(5bit)
-//   3. 扩展到 0-255 范围
-//   4. 加权平均算灰度
-//
-// 参数：
-//   byte0 — RGB565 的高字节
-//   byte1 — RGB565 的低字节
-// 返回：
-//   0~255 的灰度值
-// ============================================================================
 static uint8_t rgb565_to_gray(uint8_t byte0, uint8_t byte1)
 {
-    // 第 1 步：合成 16-bit 值
-    // byte0 是高 8 位，byte1 是低 8 位
     uint16_t pixel = ((uint16_t)byte0 << 8) | byte1;
 
-    // 第 2 步：提取 R、G、B 分量
-    //
-    // pixel 的 16 个 bit 排列：
-    //   bit: 15 14 13 12 11 | 10 9 8 7 6 5 | 4 3 2 1 0
-    //        R  R  R  R  R    G  G  G G G G   B B B B B
-    //
-    // >> 11 把红色移到最低位，& 0x1F (= 0b11111) 只保留 5 bit
-    uint8_t r5 = (pixel >> 11) & 0x1F;  // 红色 5 bit，范围 0~31
-    uint8_t g6 = (pixel >> 5)  & 0x3F;  // 绿色 6 bit，范围 0~63
-    uint8_t b5 = pixel         & 0x1F;  // 蓝色 5 bit，范围 0~31
+    uint8_t r5 = (pixel >> 11) & 0x1F;
+    uint8_t g6 = (pixel >> 5)  & 0x3F;
+    uint8_t b5 = pixel         & 0x1F;
 
-    // 第 3 步：扩展到 0~255 范围
-    //
-    // r5 范围是 0~31，要扩展到 0~255。
-    // 方法：左移 3 位（×8）得到高位，再加上右移 2 位的值填充低位。
-    // 例如 r5 = 31 (11111):
-    //   左移 3: 11111000 = 248
-    //   右移 2: 00111 = 7
-    //   相加: 248 + 7 = 255  ✓（最大值正确映射到 255）
-    //
-    // 为什么不直接 ×8？因为 31×8=248，不是 255。加上低位补偿才精确。
-    uint8_t r = (r5 << 3) | (r5 >> 2);  // 5-bit → 8-bit
-    uint8_t g = (g6 << 2) | (g6 >> 4);  // 6-bit → 8-bit
-    uint8_t b = (b5 << 3) | (b5 >> 2);  // 5-bit → 8-bit
+    uint8_t r = (r5 << 3) | (r5 >> 2);
+    uint8_t g = (g6 << 2) | (g6 >> 4);
+    uint8_t b = (b5 << 3) | (b5 >> 2);
 
-    // 第 4 步：加权平均算灰度
-    //
-    // 标准公式：gray = 0.299×R + 0.587×G + 0.114×B
-    // 整数近似：gray = (5×R + 9×G + 2×B) / 16
-    //
-    // 用 >> 4 代替 / 16（位移比除法快）
-    // 5+9+2 = 16，所以 >> 4 刚好是除以总权重
-    uint8_t gray = (5 * r + 9 * g + 2 * b) >> 4;
-
-    return gray;
+    // integer version of the usual RGB-to-luma weighting
+    return (5 * r + 9 * g + 2 * b) >> 4;
 }
 
-// ============================================================================
-// preprocess_frame() — 主函数：320×240 RGB565 → 48×48 灰度 float
-//
-// 裁剪 + 缩放 + 灰度转换 + 归一化，全部在一个双重循环里完成。
-// 不需要额外的中间缓冲区（不用先裁剪到 240×240 再缩放）。
-//
-// 参数：
-//   rgb565_frame  — 摄像头原始帧，大小 320×240×2 = 153,600 字节
-//   face_features — 输出数组，大小 48×48 = 2,304 个 float
-// ============================================================================
 void preprocess_frame(const uint8_t *rgb565_frame, float *face_features)
 {
-    // 遍历输出图片的每个像素 (48×48)
+    // crop and downsample in one pass; no extra 240x240 buffer
     for (int out_y = 0; out_y < FACE_H; out_y++)
     {
         for (int out_x = 0; out_x < FACE_W; out_x++)
         {
-            // ── 区域平均：对应的 5×5 输入像素块 ──
-            //
-            // 输出的第 (out_x, out_y) 个像素，对应输入图片中的一个 5×5 区域。
-            // 把这 25 个像素的灰度值加起来取平均，就是这个输出像素的值。
-            //
-            // 为什么取平均而不是直接取一个像素（最近邻）？
-            // 平均能抑制噪声，图像更平滑，模型识别效果更好。
-
-            int gray_sum = 0;  // 累加器，存 25 个灰度值的总和
+            int gray_sum = 0;
 
             for (int dy = 0; dy < BLOCK_SIZE; dy++)
             {
                 for (int dx = 0; dx < BLOCK_SIZE; dx++)
                 {
-                    // 计算这个像素在原始 320×240 帧中的坐标
-                    //
-                    // CROP_X_OFFSET = 40：跳过左边裁掉的 40 列
-                    // out_x * BLOCK_SIZE：当前输出像素对应的块的起始 x
-                    // dx：块内的偏移
                     int src_x = CROP_X_OFFSET + out_x * BLOCK_SIZE + dx;
                     int src_y = CROP_Y_OFFSET + out_y * BLOCK_SIZE + dy;
 
-                    // 计算这个像素在 rgb565_frame 数组中的字节偏移
-                    //
-                    // 每行有 CAMERA_W(320) 个像素，每个像素 2 字节
-                    // 所以第 (src_x, src_y) 个像素的起始字节位置 = (src_y * 320 + src_x) * 2
                     int byte_offset = (src_y * CAMERA_W + src_x) * 2;
-
-                    // 取出这个像素的 2 字节 RGB565 数据，转成灰度
-                    uint8_t byte0 = rgb565_frame[byte_offset];      // 高字节
-                    uint8_t byte1 = rgb565_frame[byte_offset + 1];  // 低字节
+                    uint8_t byte0 = rgb565_frame[byte_offset];
+                    uint8_t byte1 = rgb565_frame[byte_offset + 1];
                     gray_sum += rgb565_to_gray(byte0, byte1);
                 }
             }
 
-            // ── 取平均 + 归一化 ──
-            //
-            // gray_sum 是 25 个灰度值（0~255）的总和
-            // 除以 25 得到平均灰度（0~255）
-            // 再除以 255 归一化到 [0.0, 1.0]
-            //
-            // 合并成一步：gray_sum / (25 * 255.0f) = gray_sum / 6375.0f
-            // 用 float 除法保证精度
+            // average the 5x5 block and normalize to the model input range
             face_features[out_y * FACE_W + out_x] = (float)gray_sum / (BLOCK_SIZE * BLOCK_SIZE * 255.0f);
         }
     }

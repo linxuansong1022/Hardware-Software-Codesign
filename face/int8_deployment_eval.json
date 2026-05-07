@@ -1,27 +1,40 @@
 {
-  "tflite_path": "/Users/songlinxuan/Desktop/DTU-02214/ml_share/models/gray48_cnn_center_w001_int8/gray48_cnn_center_int8.tflite",
-  "data_dir": "/Users/songlinxuan/Desktop/DTU-02214/face/data",
-  "unknown_dir": "/Users/songlinxuan/Desktop/DTU-02214/face/data/unknown",
-  "test_total": 77,
-  "unknown_total": 259,
-  "int8_test_acc": 0.987012987012987,
-  "confusion_matrix": [
-    [
-      25,
-      0,
-      0
-    ],
-    [
-      0,
-      25,
-      0
-    ],
-    [
-      1,
-      0,
-      26
+  "model": {
+    "tflite_path": "ml_share/models/gray48_cnn_center_w001_int8/gray48_cnn_center_int8.tflite",
+    "format": "INT8 TFLite",
+    "input_shape": "48x48x1 grayscale",
+    "classes": [
+      "person_a",
+      "person_b",
+      "person_c"
     ]
-  ],
+  },
+  "data": {
+    "data_dir": "face/data",
+    "unknown_dir": "face/data/unknown",
+    "test_total": 77,
+    "unknown_total": 259
+  },
+  "closed_set": {
+    "int8_test_acc": 0.987012987012987,
+    "confusion_matrix": [
+      [
+        25,
+        0,
+        0
+      ],
+      [
+        0,
+        25,
+        0
+      ],
+      [
+        1,
+        0,
+        26
+      ]
+    ]
+  },
   "softmax_threshold_sweep": [
     {
       "threshold": 0.95,
@@ -64,7 +77,7 @@
       "unknown_total": 259
     }
   ],
-  "two_stage": {
+  "two_stage_rejection": {
     "softmax_threshold": 0.99,
     "distance_threshold": 1.875593,
     "distance_threshold_sq": 3.5178491016490003,

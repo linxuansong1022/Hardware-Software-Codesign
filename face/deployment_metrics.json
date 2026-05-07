@@ -1,21 +1,18 @@
 {
-  "paths": {
-    "tflite": "/Users/songlinxuan/Desktop/DTU-02214/ml_share/models/gray48_cnn_center_w001_int8/gray48_cnn_center_int8.tflite",
-    "esp32_build_dir": "/Users/songlinxuan/Desktop/DTU-02214/face/esp32/build",
-    "app_bin": "/Users/songlinxuan/Desktop/DTU-02214/face/esp32/build/face-recognition.bin",
-    "app_elf": "/Users/songlinxuan/Desktop/DTU-02214/face/esp32/build/face-recognition.elf",
-    "bootloader_bin": "/Users/songlinxuan/Desktop/DTU-02214/face/esp32/build/bootloader/bootloader.bin",
-    "partition_table_bin": "/Users/songlinxuan/Desktop/DTU-02214/face/esp32/build/partition_table/partition-table.bin"
-  },
   "project": {
     "name": "face-recognition",
     "target": "esp32s3",
-    "idf_path": "/Users/songlinxuan/esp/esp-idf",
-    "git_revision": "v6.1-dev-2441-gffb63db38b"
-  },
-  "metrics": {
-    "input_shape": "48x48x1 grayscale",
     "model_format": "INT8 TFLite",
+    "input_shape": "48x48x1 grayscale"
+  },
+  "paths": {
+    "tflite": "ml_share/models/gray48_cnn_center_w001_int8/gray48_cnn_center_int8.tflite",
+    "esp32_project": "face/esp32",
+    "app_binary": "face/esp32/build/face-recognition.bin",
+    "bootloader": "face/esp32/build/bootloader/bootloader.bin",
+    "partition_table": "face/esp32/build/partition_table/partition-table.bin"
+  },
+  "size_metrics": {
     "tflite_model_bytes": 30392,
     "firmware_app_bin_bytes": 404736,
     "firmware_elf_bytes": 11222024,
@@ -25,8 +22,16 @@
     "free_app_partition_bytes": 643840,
     "app_partition_used_percent": 38.5986328125
   },
+  "runtime_metrics_from_serial_logs": {
+    "capture_latency_ms_typical": "137-142",
+    "preprocess_latency_ms_typical": 20,
+    "inference_latency_ms_typical": 29,
+    "total_loop_latency_ms_typical": "189-195",
+    "fps_typical": "5.1-5.3"
+  },
   "notes": [
-    "Latency and FPS should be filled from ESP32 serial logs after flashing timing instrumentation.",
+    "Size metrics were collected from the ESP-IDF build output.",
+    "Runtime metrics are typical values observed in ESP32 serial logs during live deployment.",
     "Tensor arena size is configured in face/esp32/main/inference.cpp."
   ]
 }

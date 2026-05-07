@@ -1,5 +1,4 @@
 import argparse
-import csv
 import os
 import sys
 import time
@@ -8,7 +7,6 @@ from datetime import datetime
 import pygame
 import serial
 
-# Configuration
 DEFAULT_OUTPUT_PATH = "../data/"
 DEFAULT_PORT = "COM3"
 BAUD_RATE = 921600
@@ -17,7 +15,7 @@ WIDTH = 320
 HEIGHT = 240
 FRAME_PREAMBLE = b"===FRAME===\n"
 
-# Key → folder name mapping
+# Keyboard shortcuts used while collecting images from the board.
 CLASS_MAP: dict[int, str] = {
     pygame.K_0: "person_a",
     pygame.K_1: "person_b",
@@ -52,7 +50,6 @@ def capture_and_display_loop(port: str, output_path: str) -> None:
 
     serial_port.write(b"S")
 
-    # Count saved images per class
     counts: dict[str, int] = {name: _count_existing(output_path, name) for name in CLASS_MAP.values()}
 
     last_surface: pygame.Surface | None = None
@@ -72,7 +69,7 @@ def capture_and_display_loop(port: str, output_path: str) -> None:
                         class_name = CLASS_MAP[event.key]
                         _save_frame(output_path, last_surface, class_name)
                         counts[class_name] += 1
-                        last_saved_label = f"Saved → {class_name}"
+                        last_saved_label = f"Saved -> {class_name}"
                         last_saved_time = time.time()
 
             surface = _capture_frame(serial_port)
@@ -80,11 +77,9 @@ def capture_and_display_loop(port: str, output_path: str) -> None:
                 continue
             last_surface = surface.copy()
 
-            # Draw camera feed
             screen.fill((30, 30, 30))
             screen.blit(surface, (0, 0))
 
-            # Draw HUD bar below the image
             hud_y = HEIGHT + 5
             count_text = "  ".join(
                 f"{CLASS_LABELS[k]}({counts[CLASS_MAP[k]]})"
@@ -92,7 +87,6 @@ def capture_and_display_loop(port: str, output_path: str) -> None:
             )
             screen.blit(font.render(count_text, True, (200, 200, 200)), (5, hud_y))
 
-            # Show "Saved" flash for 1.5 seconds
             if last_saved_label and time.time() - last_saved_time < 1.5:
                 screen.blit(font.render(last_saved_label, True, (100, 255, 100)), (5, hud_y + 20))
 

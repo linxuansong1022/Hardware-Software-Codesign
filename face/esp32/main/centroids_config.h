@@ -1,6 +1,3 @@
-/* 自动生成 — 请勿手动修改 */
-/* 由 9_eval_embedding_distance.py 生成 */
-
 #ifndef CENTROIDS_CONFIG_H
 #define CENTROIDS_CONFIG_H
 
